@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Ivy Kernel CLI — parallel workspace kernel for AI agents."
+repository = "https://github.com/TemmaTech/ivk"
 
 [[bin]]
 name = "ivk"

@@ -26,31 +26,7 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# ---------------------------------------------------------------------------
-# cargo-dist: prebuilt binary distribution for v0.1.0+ releases.
-# ---------------------------------------------------------------------------
-# Workflow:
-#   cargo install cargo-dist
-#   cargo dist init       (regenerates .github/workflows/release.yml)
-#   git tag v0.1.0
-#   git push origin v0.1.0
-# The release workflow builds binaries on the matrix below, uploads them to a
-# GitHub Release, and (if `installers = ["homebrew"]`) opens a PR to the
-# ivykernel/homebrew-tap repo with an updated Formula.
-#
-# See docs/release.md for the full procedure.
-
-[workspace.metadata.dist]
-cargo-dist-version = "0.27.0"
-ci = ["github"]
-installers = ["shell", "homebrew"]
-tap = "ivykernel/homebrew-tap"
-formula = "ivk"
-targets = [
-  "x86_64-apple-darwin",
-  "aarch64-apple-darwin",
-  "x86_64-unknown-linux-gnu",
-  "aarch64-unknown-linux-gnu",
-]
-pr-run-mode = "plan"
-allow-dirty = ["ci"]
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
