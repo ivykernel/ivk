@@ -48,6 +48,11 @@ ivk new attempt-1 attempt-2 attempt-3</code></pre>
   </section>
 
   <section id="benchmarks" class="benchmarks">
+    <h2>Watch it happen</h2>
+    <p>Two ways to create 20 isolated workspaces of the same 200 MB repo. Same end state, very different disk:</p>
+    <video src="disk-comparison.mp4" autoplay loop muted playsinline poster="disk-comparison.gif"></video>
+    <p class="recording-note">No editing: the recording runs the actual commands and reads disk usage from <code>du -sh</code> live. Source: <a href="https://github.com/ivykernel/ivk/blob/main/demos/disk-comparison.tape"><code>demos/disk-comparison.tape</code></a>.</p>
+
     <h2>Disk consumed by N parallel workspaces</h2>
     <object data="disk-scaling.svg" type="image/svg+xml" aria-label="Disk consumption chart: ivk vs git worktree across N workspaces"></object>
     <p>Both lines on the same log axis. The gap between the red and blue lines is the ivk story.</p>

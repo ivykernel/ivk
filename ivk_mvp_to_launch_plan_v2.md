@@ -1550,7 +1550,7 @@ Exit criteria:
 
 - [x] GitHub Pages site is built (live status is true once the repo is pushed and Pages is enabled in repo settings: source = main branch, /docs)
 - [x] README links to docs
-- [ ] docs include demo GIF or terminal recording — [`demos/disk-comparison.tape`](./demos/disk-comparison.tape) is ready; rendering to GIF/MP4 requires running `vhs` locally (1 command, ~3 minutes). Left as a single manual step pre-launch so the recording has a stable filename for the LP to link.
+- [x] docs include demo GIF or terminal recording — rendered [`demos/disk-comparison.mp4`](./demos/disk-comparison.mp4) + [`demos/disk-comparison.gif`](./demos/disk-comparison.gif) via `vhs demos/disk-comparison.tape`, embedded in [`docs/index.html`](./docs/index.html) (and served at `https://ivykernel.github.io/ivk/disk-comparison.mp4`).
 
 ---
 

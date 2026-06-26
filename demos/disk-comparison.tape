@@ -4,29 +4,29 @@
 #   brew install vhs
 #   vhs demos/disk-comparison.tape
 #
-# Output: demos/disk-comparison.mp4 + demos/disk-comparison.gif
+# Outputs: demos/disk-comparison.mp4 + demos/disk-comparison.gif
 #
 # What this demonstrates:
-#   1. Both workflows create 50 isolated workspaces from the same base repo.
-#   2. df is sampled before/after to show real disk consumption.
-#   3. git worktree fills ~10 GB. ivk fills ~50 MB. Same end state.
+#   N = 20 isolated workspaces of a 200 MB repo.
+#   Left half: created via `git worktree`. Disk usage measured with `du -sh`.
+#   Right half: created via `ivk new`. Same measurement.
+#   The disk-usage line at the end of each run is the punch line.
 #
-# Why 50 workspaces and not 100: keeps the demo under 60 seconds while still
-# making the divergence obvious. The CSV chart (demos/chart.svg) covers N=100.
+# Why 20 and not 100: keeps the recording under 90 seconds while still showing
+# the magnitude gap clearly. The full bench at N=100 lives in results/summary.md.
 
 Output demos/disk-comparison.mp4
 Output demos/disk-comparison.gif
 
 Set FontSize 18
 Set Width 1400
-Set Height 800
+Set Height 720
 Set Padding 20
 Set Theme "Catppuccin Mocha"
 Set Shell "bash"
 Set TypingSpeed 30ms
 
-# Setup: ensure repo-M is generated and we're in a clean state.
-# The recording must be invoked from the ivk repo root:
+# Setup. The recording must be invoked from the ivk repo root:
 #   cd <ivk-repo-root> && vhs demos/disk-comparison.tape
 Hide
 Type "bash scripts/bench/gen-repo.sh M >/dev/null 2>&1 && clear"
@@ -34,81 +34,58 @@ Enter
 Sleep 500ms
 Show
 
-Type "# Goal: create 50 isolated workspaces of a 200 MB repo."
-Sleep 800ms
-Enter
-Type "# Two ways to do it. Watch the disk."
+Type "# Goal: 20 isolated workspaces of a 200 MB repo. Two ways."
 Sleep 1s
 Enter
 Enter
 
 # --- Way 1: git worktree ---
-Type "echo '--- 50 worktrees the standard way (git worktree) ---'"
+Type "echo '--- the standard way: 20 git worktrees ---'"
 Enter
-Sleep 600ms
+Sleep 800ms
 
-Type "BEFORE=$(df -k . | awk 'NR==2 {print $4}')"
-Enter
-Sleep 300ms
-Type "echo \"disk free before: $((BEFORE/1024/1024)) GB\""
-Enter
-Sleep 600ms
-
-Type "time (for i in $(seq 1 50); do git -C .cache/repo-M worktree add -q --detach .cache/demo-wt/ws-$i HEAD; done)"
+Type "time bash -c 'for i in $(seq 1 20); do git -C .cache/repo-M worktree add -q --detach .cache/demo-wt/ws-$i HEAD; done'"
 Enter
 Sleep 200ms
-# Wait for the actual command to complete (~25 s on M)
-Sleep 25s
+Sleep 12s
 
-Type "AFTER=$(df -k . | awk 'NR==2 {print $4}')"
+Type "du -sh .cache/demo-wt"
 Enter
-Sleep 300ms
-Type "echo \"disk consumed: $(( (BEFORE - AFTER) / 1024 )) MB\""
-Enter
-Sleep 1500ms
+Sleep 500ms
+Sleep 2s
 
 # Cleanup before next round
 Hide
-Type "for i in $(seq 1 50); do git -C .cache/repo-M worktree remove --force .cache/demo-wt/ws-$i 2>/dev/null; done; rm -rf .cache/demo-wt; git -C .cache/repo-M worktree prune"
+Type "for i in $(seq 1 20); do git -C .cache/repo-M worktree remove --force .cache/demo-wt/ws-$i 2>/dev/null; done; rm -rf .cache/demo-wt; git -C .cache/repo-M worktree prune"
 Enter
-Sleep 8s
+Sleep 5s
 Show
 
 Enter
 
-# --- Way 2: ivk (approach F via current shell bench) ---
-Type "echo '--- 50 workspaces the ivk way (clonefile + worktree pointer) ---'"
+# --- Way 2: ivk (Rust clonefile binary) ---
+Type "echo '--- ivk: 20 workspaces via clonefile + git worktree pointer ---'"
 Enter
-Sleep 600ms
+Sleep 800ms
 
-Type "BEFORE=$(df -k . | awk 'NR==2 {print $4}')"
-Enter
-Sleep 300ms
-Type "echo \"disk free before: $((BEFORE/1024/1024)) GB\""
-Enter
-Sleep 600ms
-
-Type "time (for i in $(seq 1 50); do bash scripts/bench/create-one.sh F .cache/repo-M .cache/demo-ivk/ws-$i; done)"
+Type "time bash -c 'for i in $(seq 1 20); do bash scripts/bench/create-one.sh G .cache/repo-M .cache/demo-ivk/ws-$i; done'"
 Enter
 Sleep 200ms
-# Wait for the actual command to complete (~120 s on M with current shell impl)
-Sleep 130s
+Sleep 8s
 
-Type "AFTER=$(df -k . | awk 'NR==2 {print $4}')"
+Type "du -sh .cache/demo-ivk"
 Enter
-Sleep 300ms
-Type "echo \"disk consumed: $(( (BEFORE - AFTER) / 1024 )) MB\""
-Enter
+Sleep 500ms
 Sleep 2s
 
 # Cleanup
 Hide
-Type "for i in $(seq 1 50); do git -C .cache/repo-M worktree remove --force .cache/demo-ivk/ws-$i 2>/dev/null; done; rm -rf .cache/demo-ivk; git -C .cache/repo-M worktree prune"
+Type "for i in $(seq 1 20); do git -C .cache/repo-M worktree remove --force .cache/demo-ivk/ws-$i 2>/dev/null; done; rm -rf .cache/demo-ivk; git -C .cache/repo-M worktree prune"
 Enter
-Sleep 8s
+Sleep 5s
 Show
 
 Enter
-Type "# Same 50 workspaces. ~200x less disk."
+Type "# Same 20 workspaces. ivk uses orders of magnitude less disk."
 Sleep 3s
 Enter

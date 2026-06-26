@@ -132,15 +132,19 @@ td:nth-child(n+2), th:nth-child(n+2) {
   margin-top: 48px;
 }
 
-.benchmarks object {
+.benchmarks object,
+.benchmarks video {
   display: block;
   width: 100%;
   height: auto;
   max-width: 100%;
   margin: 8px 0 4px;
+  border-radius: 6px;
+  background: var(--code-bg);
 }
 
 .benchmarks p { color: var(--fg-muted); font-size: 14px; margin-top: 8px; }
+.benchmarks .recording-note { font-size: 13px; margin-bottom: 32px; }
 
 /* ---- How / Agent / Filesystem / Positioning sections ---- */
 
