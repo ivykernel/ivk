@@ -56,9 +56,13 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          # Capture the absolute path to the binary up front so we never have
+          # to count `..` segments after `cd`-ing into a workspace.
+          IVK="$PWD/target/release/ivk"
+
           # 1. ivk binary self-check.
-          ./target/release/ivk --version
-          ./target/release/ivk help --agent | grep -q '"command": "help.agent"'
+          "$IVK" --version
+          "$IVK" help --agent | grep -q '"command": "help.agent"'
 
           # 2. End-to-end: create a workspace, doctor it, modify it, doctor again.
           mkdir -p .ci/repo
@@ -68,8 +72,8 @@ jobs:
           echo 'hello' > src/main.rs
           git -c user.email=ci@ivk -c user.name=ci add -A
           git -c user.email=ci@ivk -c user.name=ci commit -q -m initial
-          ../../target/release/ivk new ci-1 --json | grep -q '"ok": true'
+          "$IVK" new ci-1 --json | grep -q '"ok": true'
           cd .ivk/workspaces/ci-1
-          ../../../../target/release/ivk doctor --agent --json | grep -q '"workspace_status": "clean"'
+          "$IVK" doctor --agent --json | grep -q '"workspace_status": "clean"'
           echo 'edit' >> src/main.rs
-          ../../../../target/release/ivk doctor --agent --json | grep -q '"workspace_status": "dirty"'
+          "$IVK" doctor --agent --json | grep -q '"workspace_status": "dirty"'
