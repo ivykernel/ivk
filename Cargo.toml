@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/ivk-core",
+  "crates/ivk-cli",
+  "crates/clonewt",
+]
+# The bench fixtures are independent Cargo projects; keep .cache/ out of the
+# workspace so the materialized workspaces with their own Cargo.toml don't
+# confuse cargo about which workspace they belong to.
+exclude = [
+  ".cache",
+]
+
+# NOTE: workspace.package inheritance (`edition.workspace = true`) requires
+# Rust 1.64+. The dev box this was scaffolded on has 1.59, so we duplicate
+# edition / license in each member's Cargo.toml. Update both places when bumping.
+
+# workspace.dependencies inheritance requires Rust 1.64+; each crate uses
+# path = "../ivk-core" directly until we bump the MSRV.
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# ---------------------------------------------------------------------------
+# cargo-dist: prebuilt binary distribution for v0.1.0+ releases.
+# ---------------------------------------------------------------------------
+# Workflow:
+#   cargo install cargo-dist
+#   cargo dist init       (regenerates .github/workflows/release.yml)
+#   git tag v0.1.0
+#   git push origin v0.1.0
+# The release workflow builds binaries on the matrix below, uploads them to a
+# GitHub Release, and (if `installers = ["homebrew"]`) opens a PR to the
+# ivykernel/homebrew-tap repo with an updated Formula.
+#
+# See docs/release.md for the full procedure.
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.27.0"
+ci = ["github"]
+installers = ["shell", "homebrew"]
+tap = "ivykernel/homebrew-tap"
+formula = "ivk"
+targets = [
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+]
+pr-run-mode = "plan"
+allow-dirty = ["ci"]

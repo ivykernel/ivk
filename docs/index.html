@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ivy Kernel — parallel workspace kernel for AI agents</title>
+  <meta name="description" content="ivk makes 100 parallel agent workspaces fit in the disk of one — and creates them 5× faster than git worktree.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <h1>Ivy Kernel</h1>
+    <p class="tagline">Parallel workspaces for AI agents.<br>
+       100 parallel working trees in the disk of one — and faster than <code>git worktree</code>.</p>
+
+    <div class="install">
+      <pre><code>brew tap ivykernel/tap
+brew install ivk
+
+ivk init --agent-instructions
+ivk new attempt-1 attempt-2 attempt-3</code></pre>
+    </div>
+
+    <p class="status">
+      <a href="https://github.com/ivykernel/ivk">GitHub</a> ·
+      <a href="https://github.com/ivykernel/ivk/blob/main/ivk_mvp_to_launch_plan_v2.md">Roadmap</a> ·
+      <a href="#benchmarks">Benchmarks</a> ·
+      <a href="#agent-guide">For agents</a>
+    </p>
+  </header>
+
+  <section class="claim">
+    <h2>The claim</h2>
+    <p>Run a coding agent — or ten of them, or a hundred — on the same repo without your laptop melting. Each agent gets its own real workspace, materialized cheaply via APFS <code>clonefile(2)</code> (macOS) or <code>cp --reflink</code> (Linux btrfs / xfs / zfs).</p>
+
+    <table class="comparison">
+      <thead>
+        <tr><th></th><th><code>git worktree</code></th><th>ivk</th><th>savings</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>100 workspaces of a 600 MB project (disk)</td><td>64.85 GB</td><td><b>1.00 GB</b></td><td><b>65×</b> less</td></tr>
+        <tr><td>100 workspaces (create time, serial)</td><td>4.58 min</td><td><b>50 s</b></td><td><b>5.4×</b> faster</td></tr>
+        <tr><td>100 workspaces (create time, 8-way parallel)</td><td>3.20 min</td><td><b>38 s</b></td><td>5.0× faster</td></tr>
+        <tr><td>First edit in a workspace</td><td>121 ms</td><td>84 ms</td><td>parity</td></tr>
+      </tbody>
+    </table>
+    <p class="caveat">Numbers from <a href="https://github.com/ivykernel/ivk/blob/main/results/summary.md">results/summary.md</a>, reproducible with <a href="https://github.com/ivykernel/ivk/tree/main/scripts/bench"><code>scripts/bench/</code></a>.</p>
+  </section>
+
+  <section id="benchmarks" class="benchmarks">
+    <h2>Disk consumed by N parallel workspaces</h2>
+    <object data="disk-scaling.svg" type="image/svg+xml" aria-label="Disk consumption chart: ivk vs git worktree across N workspaces"></object>
+    <p>Both lines on the same log axis. The gap between the red and blue lines is the ivk story.</p>
+  </section>
+
+  <section class="how">
+    <h2>How it works</h2>
+    <ol>
+      <li><b>Skip cloning <code>.git/</code>.</b> Use <code>git worktree add --no-checkout</code> to set up the worktree admin file, exactly like the standard tool. The source repo's object store is shared at zero cost.</li>
+      <li><b>Clone the working tree via the kernel.</b> Each top-level entry under the source goes through one <code>clonefile(2)</code> call (recursive on directories). On macOS APFS this is metadata-only; the underlying blocks remain shared until something writes to them.</li>
+      <li><b>Populate the index with <code>git read-tree HEAD</code>.</b> No file I/O; just makes <code>git status</code> see a clean tree. ~30 ms.</li>
+    </ol>
+    <p>Three steps, ~160 ms per workspace at warm cache on a 10k-file repo. The benchmark numbers above include all three.</p>
+  </section>
+
+  <section id="agent-guide" class="agent">
+    <h2>For AI agents</h2>
+    <p>Every command supports <code>--json</code> for machine output and <code>--agent</code> for an agent-friendly summary with a <code>next_command</code> field. Drop <a href="https://github.com/ivykernel/ivk/blob/main/AGENTS.md"><code>AGENTS.md</code></a> and <a href="https://github.com/ivykernel/ivk/tree/main/skills/ivk"><code>skills/ivk/</code></a> into your repo (or let <code>ivk init --agent-instructions</code> do it) and an agent that's never heard of <code>ivk</code> can follow the workflow without prior knowledge.</p>
+
+    <pre><code>$ ivk doctor --agent --json
+{
+  "ok": true,
+  "command": "doctor",
+  "next_command": "ivk new &lt;task-name&gt;",
+  "recommended_next_steps": [...],
+  "inside_ivk_workspace": false,
+  "repo_initialized": true,
+  ...
+}</code></pre>
+
+    <p>See the full <a href="https://github.com/ivykernel/ivk/blob/main/examples/demo-task/session.md">recorded session transcript</a> — every step an agent takes to fix a tiny off-by-one bug, with the literal JSON output captured.</p>
+  </section>
+
+  <section class="filesystem">
+    <h2>Filesystem support</h2>
+    <table>
+      <thead><tr><th>OS</th><th>FS</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>macOS</td><td>APFS</td><td>✅ default; <code>clonefile(2)</code></td></tr>
+        <tr><td>Linux</td><td>btrfs / xfs(reflink) / zfs ≥ 2.2</td><td>✅ <code>cp --reflink=always</code></td></tr>
+        <tr><td>Linux</td><td>ext4</td><td>❌ no reflink; overlayfs fallback planned</td></tr>
+        <tr><td>Windows</td><td>—</td><td>out of scope (MVP)</td></tr>
+      </tbody>
+    </table>
+    <p>Details: <a href="portability.html">portability.md</a>.</p>
+  </section>
+
+  <section class="positioning">
+    <h2>Positioning</h2>
+    <p><b>Git</b> stores history.<br>
+       <b>Jujutsu</b> makes local change history easier.<br>
+       <b>Ivy Kernel</b> manages parallel AI workspaces.</p>
+    <p>Read <a href="https://github.com/ivykernel/ivk/blob/main/ivk_design_philosophy.md">the design philosophy</a> for the longer story.</p>
+  </section>
+
+  <footer>
+    <p>ivk · MIT or Apache-2.0 · <a href="https://github.com/ivykernel/ivk">github.com/ivykernel/ivk</a></p>
+  </footer>
+</body>
+</html>

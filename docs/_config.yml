@@ -1,0 +1,23 @@
+# GitHub Pages / Jekyll configuration.
+#
+# This file lets GitHub render the markdown files in docs/ as a site.
+# index.html is the landing page; the markdown files (portability.md and
+# anything else we add) become reachable as <site>/<filename>.
+
+title: Ivy Kernel
+description: Parallel workspace kernel for AI agents.
+url: https://ivykernel.dev   # placeholder; update when the domain is wired up.
+
+# Don't auto-generate posts; this isn't a blog.
+collections: {}
+
+# Use the bare minimum theme so we don't pull in jekyll-theme-* asset trees.
+# index.html supplies its own styles.
+theme: null
+plugins: []
+
+# Files / paths Jekyll should NOT process.
+exclude:
+  - "*.tape"
+  - Gemfile
+  - Gemfile.lock

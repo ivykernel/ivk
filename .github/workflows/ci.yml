@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  rust:
+    name: ${{ matrix.os }} / fmt + clippy + test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS-latest gives us APFS clonefile; ubuntu-latest gives us ext4
+        # (no reflink) so the linux backend currently exercises the cp --reflink
+        # path against a non-reflink FS, which we accept as best-effort. A
+        # btrfs runner can be added later.
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo build (release)
+        run: cargo build --workspace --release
+
+      - name: cargo test
+        # Linux can't reflink on default ext4; skip integration tests there
+        # until we add a btrfs/xfs runner. The macOS job covers the full suite.
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cargo test --workspace --lib --release
+          else
+            cargo test --workspace --release
+          fi
+        shell: bash
+
+      - name: Smoke test (macOS only — exercises clonefile)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          # 1. ivk binary self-check.
+          ./target/release/ivk --version
+          ./target/release/ivk help --agent | grep -q '"command": "help.agent"'
+
+          # 2. End-to-end: create a workspace, doctor it, modify it, doctor again.
+          mkdir -p .ci/repo
+          cd .ci/repo
+          git init -q -b main
+          mkdir -p src
+          echo 'hello' > src/main.rs
+          git -c user.email=ci@ivk -c user.name=ci add -A
+          git -c user.email=ci@ivk -c user.name=ci commit -q -m initial
+          ../../target/release/ivk new ci-1 --json | grep -q '"ok": true'
+          cd .ivk/workspaces/ci-1
+          ../../../../target/release/ivk doctor --agent --json | grep -q '"workspace_status": "clean"'
+          echo 'edit' >> src/main.rs
+          ../../../../target/release/ivk doctor --agent --json | grep -q '"workspace_status": "dirty"'

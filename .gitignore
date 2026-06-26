@@ -1,0 +1,36 @@
+# --- Build outputs ---
+/target/
+**/target/
+
+# --- Bench inputs / outputs (large, regenerable) ---
+.cache/
+results/raw/
+results/build/*/
+results/todo-100-*/
+
+# --- Python scratch ---
+*.pyc
+__pycache__/
+
+# --- OS / editor cruft ---
+.DS_Store
+.Spotlight-V100
+.Trashes
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# --- Editor / IDE state ---
+.idea/
+.vscode/
+*.iml
+
+# --- Secrets / local config (defense in depth; we don't ship any today) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+secrets*

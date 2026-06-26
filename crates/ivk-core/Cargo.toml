@@ -1,0 +1,10 @@
+[package]
+name = "ivk-core"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Core kernel logic for Ivy Kernel: workspace materialization via clonefile / reflink."
+
+[lib]
+name = "ivk_core"
+path = "src/lib.rs"

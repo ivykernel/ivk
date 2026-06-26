@@ -1,0 +1,19 @@
+[package]
+name = "ivk-cli"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Ivy Kernel CLI — parallel workspace kernel for AI agents."
+
+[[bin]]
+name = "ivk"
+path = "src/main.rs"
+
+[dependencies]
+ivk-core = { path = "../ivk-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
+filetime = "0.2"

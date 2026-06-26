@@ -1,0 +1,14 @@
+[package]
+name = "clonewt"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Bench harness binary for the ivk-hybrid materializer (thin wrapper around ivk-core)."
+publish = false
+
+[[bin]]
+name = "clonewt"
+path = "src/main.rs"
+
+[dependencies]
+ivk-core = { path = "../ivk-core" }

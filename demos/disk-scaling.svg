@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" fill="#1f2937">
+<rect width="100%" height="100%" fill="#fafafa"/>
+<text x="550.0" y="32" text-anchor="middle" font-size="22" font-weight="600">Disk consumed by N parallel workspaces</text>
+<text x="550.0" y="54" text-anchor="middle" fill="#6b7280" font-size="13">Same repo, same end state. log scale — note the gap.</text>
+<line x1="90" y1="550" x2="880" y2="550" stroke="#9ca3af" stroke-width="1"/>
+<line x1="90" y1="70" x2="90" y2="550" stroke="#9ca3af" stroke-width="1"/>
+<line x1="90.0" y1="550" x2="90.0" y2="556" stroke="#9ca3af"/>
+<text x="90.0" y="572" text-anchor="middle" fill="#374151">1</text>
+<line x1="485.0" y1="550" x2="485.0" y2="556" stroke="#9ca3af"/>
+<text x="485.0" y="572" text-anchor="middle" fill="#374151">10</text>
+<line x1="761.0931517127274" y1="550" x2="761.0931517127274" y2="556" stroke="#9ca3af"/>
+<text x="761.0931517127274" y="572" text-anchor="middle" fill="#374151">50</text>
+<line x1="880.0" y1="550" x2="880.0" y2="556" stroke="#9ca3af"/>
+<text x="880.0" y="572" text-anchor="middle" fill="#374151">100</text>
+<text x="485.0" y="600" text-anchor="middle" font-size="14" fill="#374151">workspaces (N)</text>
+<line x1="84" y1="503.9485484514537" x2="880" y2="503.9485484514537" stroke="#e5e7eb" stroke-width="1"/>
+<text x="80" y="508.9485484514537" text-anchor="end" fill="#374151">9 MB</text>
+<line x1="84" y1="390.7204345012423" x2="880" y2="390.7204345012423" stroke="#e5e7eb" stroke-width="1"/>
+<text x="80" y="395.7204345012423" text-anchor="end" fill="#374151">97 MB</text>
+<line x1="84" y1="277.49232055103096" x2="880" y2="277.49232055103096" stroke="#e5e7eb" stroke-width="1"/>
+<text x="80" y="282.49232055103096" text-anchor="end" fill="#374151">976 MB</text>
+<line x1="84" y1="164.2642066008196" x2="880" y2="164.2642066008196" stroke="#e5e7eb" stroke-width="1"/>
+<text x="80" y="169.2642066008196" text-anchor="end" fill="#374151">9.5 GB</text>
+<path d="M 90.0,349.8028849840974 L 90.0,349.75241246437895 L 485.0,236.5657848460918 L 485.0,236.56364551958762 L 761.0931517127274,157.39673875601034 L 761.0931517127274,157.36011147525488 L 880.0,123.30215301852252 L 880.0,123.00197081116306" fill="none" stroke="#c45a5a" stroke-width="2.5" stroke-dasharray="8,4"/>
+<circle cx="90.0" cy="349.8028849840974" r="4" fill="#c45a5a"/>
+<circle cx="90.0" cy="349.75241246437895" r="4" fill="#c45a5a"/>
+<circle cx="485.0" cy="236.5657848460918" r="4" fill="#c45a5a"/>
+<circle cx="485.0" cy="236.56364551958762" r="4" fill="#c45a5a"/>
+<circle cx="761.0931517127274" cy="157.39673875601034" r="4" fill="#c45a5a"/>
+<circle cx="761.0931517127274" cy="157.36011147525488" r="4" fill="#c45a5a"/>
+<circle cx="880.0" cy="123.30215301852252" r="4" fill="#c45a5a"/>
+<circle cx="880.0" cy="123.00197081116306" r="4" fill="#c45a5a"/>
+<path d="M 90.0,296.61869350436785 L 485.0,183.2540497135791 L 761.0931517127274,103.84345316380546 L 880.0,70.0" fill="none" stroke="#9a2a2a" stroke-width="2.5"/>
+<circle cx="90.0" cy="296.61869350436785" r="4" fill="#9a2a2a"/>
+<circle cx="485.0" cy="183.2540497135791" r="4" fill="#9a2a2a"/>
+<circle cx="761.0931517127274" cy="103.84345316380546" r="4" fill="#9a2a2a"/>
+<circle cx="880.0" cy="70.0" r="4" fill="#9a2a2a"/>
+<path d="M 90.0,550.0 L 485.0,436.6165800577604 L 761.0931517127274,358.68171580302743 L 880.0,320.96042931864645" fill="none" stroke="#3a8fbf" stroke-width="2.5" stroke-dasharray="8,4"/>
+<circle cx="90.0" cy="550.0" r="4" fill="#3a8fbf"/>
+<circle cx="485.0" cy="436.6165800577604" r="4" fill="#3a8fbf"/>
+<circle cx="761.0931517127274" cy="358.68171580302743" r="4" fill="#3a8fbf"/>
+<circle cx="880.0" cy="320.96042931864645" r="4" fill="#3a8fbf"/>
+<path d="M 90.0,504.10615866677955 L 485.0,391.713889402523 L 761.0931517127274,312.83043612742927 L 880.0,277.2877878314212" fill="none" stroke="#1c5980" stroke-width="2.5"/>
+<circle cx="90.0" cy="504.10615866677955" r="4" fill="#1c5980"/>
+<circle cx="485.0" cy="391.713889402523" r="4" fill="#1c5980"/>
+<circle cx="761.0931517127274" cy="312.83043612742927" r="4" fill="#1c5980"/>
+<circle cx="880.0" cy="277.2877878314212" r="4" fill="#1c5980"/>
+<text x="894.0" y="127.00197081116306" fill="#c45a5a" font-weight="600">22.1 GB</text>
+<text x="894.0" y="74.0" fill="#9a2a2a" font-weight="600">64.9 GB</text>
+<text x="894.0" y="324.96042931864645" fill="#3a8fbf" font-weight="600">403 MB</text>
+<text x="894.0" y="281.2877878314212" fill="#1c5980" font-weight="600">980 MB</text>
+<text x="910" y="92" font-weight="600" font-size="13">approach × repo</text>
+<line x1="912" y1="105" x2="936" y2="105" stroke="#c45a5a" stroke-width="2.5" stroke-dasharray="8,4"/>
+<text x="942" y="110" fill="#1f2937">git worktree (M: code)</text>
+<line x1="912" y1="127" x2="936" y2="127" stroke="#9a2a2a" stroke-width="2.5"/>
+<text x="942" y="132" fill="#1f2937">git worktree (MD: code+deps)</text>
+<line x1="912" y1="149" x2="936" y2="149" stroke="#3a8fbf" stroke-width="2.5" stroke-dasharray="8,4"/>
+<text x="942" y="154" fill="#1f2937">ivk (M: code)</text>
+<line x1="912" y1="171" x2="936" y2="171" stroke="#1c5980" stroke-width="2.5"/>
+<text x="942" y="176" fill="#1f2937">ivk (MD: code+deps)</text>
+</svg>
