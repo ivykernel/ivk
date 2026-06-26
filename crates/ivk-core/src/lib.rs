@@ -125,7 +125,9 @@ mod backend {
         if status.success() {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "cp --reflink failed"))
+            // `io::Error::other` was stabilized in Rust 1.74. MSRV is the same
+            // as ivk-cli (>= 1.74), so this is safe on every supported toolchain.
+            Err(io::Error::other("cp --reflink failed"))
         }
     }
 
