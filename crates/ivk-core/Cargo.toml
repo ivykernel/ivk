@@ -4,6 +4,11 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Core kernel logic for Ivy Kernel: workspace materialization via clonefile / reflink."
+homepage = "https://ivykernel.github.io/ivk/"
+repository = "https://github.com/ivykernel/ivk"
+readme = "../../README.md"
+keywords = ["git", "worktree", "clonefile", "reflink", "workspace"]
+categories = ["development-tools", "filesystem"]
 
 [lib]
 name = "ivk_core"

@@ -8,6 +8,9 @@ results/raw/
 results/build/*/
 results/todo-100-*/
 
+# --- CI smoke-test scratch (mkdir'd by .github/workflows/ci.yml; harmless local leftover) ---
+.ci/
+
 # --- Python scratch ---
 *.pyc
 __pycache__/
