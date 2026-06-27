@@ -48,14 +48,23 @@ ivk new attempt-1 attempt-2 attempt-3</code></pre>
   </section>
 
   <section id="benchmarks" class="benchmarks">
-    <h2>Watch it happen</h2>
-    <p>Two ways to create 20 isolated workspaces of the same 200 MB repo. Same end state, very different disk:</p>
-    <video src="disk-comparison.mp4" autoplay loop muted playsinline poster="disk-comparison.gif"></video>
-    <p class="recording-note">No editing: the recording runs the actual commands and reads disk usage from <code>du -sh</code> live. Source: <a href="https://github.com/ivykernel/ivk/blob/main/demos/disk-comparison.tape"><code>demos/disk-comparison.tape</code></a>.</p>
+    <h2>Watch the disk gap open</h2>
+    <p>Create 20 workspaces of the same 200 MB repo, one pair at a time. <strong>Red</strong> is <code>git worktree</code>; <strong>blue</strong> is ivk. The bars are live — they grow after each pair is created. <code>df</code> deltas are read from the real filesystem, not simulated.</p>
+    <video src="disk-race.mp4" autoplay loop muted playsinline poster="disk-race.gif"></video>
+    <p class="recording-note">Source: <a href="https://github.com/ivykernel/ivk/blob/main/scripts/bench/live-race.sh"><code>scripts/bench/live-race.sh</code></a> · recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/ivykernel/ivk/blob/main/demos/disk-race.tape"><code>demos/disk-race.tape</code></a>.</p>
+
+    <h2>Watch the build-time gap open</h2>
+    <p>Same fixture, same <code>cargo build --release</code>, both started in parallel. The ivk workspace inherits the source's clonefile'd <code>target/</code> — cargo finds the fingerprints valid and exits in sub-second. The git worktree's cargo invalidates its cache (different absolute paths) and rebuilds from scratch.</p>
+    <video src="build-race.mp4" autoplay loop muted playsinline poster="build-race.gif"></video>
+    <p class="recording-note">Source: <a href="https://github.com/ivykernel/ivk/blob/main/scripts/bench/live-build-race.sh"><code>scripts/bench/live-build-race.sh</code></a> · matches the cell measured in <a href="https://github.com/ivykernel/ivk/blob/main/results/build-summary.md">results/build-summary.md</a> (200× ratio, here 140×).</p>
 
     <h2>Disk consumed by N parallel workspaces</h2>
     <object data="disk-scaling.svg" type="image/svg+xml" aria-label="Disk consumption chart: ivk vs git worktree across N workspaces"></object>
     <p>Both lines on the same log axis. The gap between the red and blue lines is the ivk story.</p>
+
+    <h2>Same disk comparison, terminal-style</h2>
+    <p>The disk race in a wider format with <code>du -sh</code> punch-lines instead of live bars:</p>
+    <video src="disk-comparison.mp4" autoplay loop muted playsinline poster="disk-comparison.gif"></video>
   </section>
 
   <section class="how">
@@ -84,6 +93,13 @@ ivk new attempt-1 attempt-2 attempt-3</code></pre>
 }</code></pre>
 
     <p>See the full <a href="https://github.com/ivykernel/ivk/blob/main/examples/demo-task/session.md">recorded session transcript</a> — every step an agent takes to fix a tiny off-by-one bug, with the literal JSON output captured.</p>
+  </section>
+
+  <section class="caches">
+    <h2>"But what about build caches?"</h2>
+    <p>The common complaint with N parallel <code>git worktree</code>s is that every new tree starts cold — full <code>cargo build</code>, full <code>pnpm install</code>, every time. AI agents make this hurt N× more.</p>
+    <p>ivk inherits the source repo's warm cache state via clonefile <em>automatically</em>. The Rust spike showed <strong>200×</strong> faster builds because cargo's <code>target/.fingerprint/</code> survives the clone bit-perfect; pnpm's symlink trees, Go's <code>GOCACHE</code>, TypeScript's <code>tsbuildinfo</code> all the same.</p>
+    <p>For agents that <em>edit</em> source and rebuild repeatedly across workspaces, point one env var (<code>CARGO_TARGET_DIR</code>, <code>TURBO_REMOTE_CACHE_HOME</code>, …) at a shared dir. Full per-toolchain recipes: <a href="build-cache-recipes.html"><code>docs/build-cache-recipes.md</code></a> (Cargo, pnpm, npm, TypeScript, uv, Go, Gradle, Bazel, sccache, Turbo).</p>
   </section>
 
   <section class="filesystem">
