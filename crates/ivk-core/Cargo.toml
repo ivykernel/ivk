@@ -13,3 +13,8 @@ categories = ["development-tools", "filesystem"]
 [lib]
 name = "ivk_core"
 path = "src/lib.rs"
+
+# libc on Linux gives us a direct ioctl(FICLONE) without shelling out to cp.
+# macOS gets clonefile(2) via a plain extern "C" declaration; no libc needed.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

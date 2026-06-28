@@ -109,30 +109,91 @@ mod backend {
 
 #[cfg(target_os = "linux")]
 mod backend {
-    use std::ffi::{CString, OsStr};
+    use std::ffi::CString;
+    use std::fs;
     use std::io;
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink as symlink_unix;
+    use std::os::unix::io::AsRawFd;
+    use std::path::Path;
 
-    /// Delegates to `cp --reflink=always -R`. A future revision will call
-    /// the ioctl(FICLONE) syscall directly to avoid the fork; for the spike
-    /// this matches what the portable shell wrapper does.
-    pub fn clone_path(src: &CString, dst: &CString) -> io::Result<()> {
-        let status = std::process::Command::new("cp")
-            .args(["--reflink=always", "-R"])
-            .arg(OsStr::from_bytes(src.as_bytes()))
-            .arg(OsStr::from_bytes(dst.as_bytes()))
-            .status()?;
-        if status.success() {
+    /// FICLONE ioctl. Linux's per-file reflink: shares all extents of `src`
+    /// with `dst` until either is written to. Equivalent to APFS's
+    /// `clonefile(2)` for a single file, but NOT recursive on directories;
+    /// we walk the tree ourselves below.
+    ///
+    /// Value: `_IOW('X', 9, int)` = `0x40049409` on most architectures.
+    /// Defined in `<linux/fs.h>`; not currently in the `libc` crate's
+    /// public surface, so we hard-code the constant.
+    const FICLONE: libc::c_ulong = 0x4004_9409;
+
+    pub fn clone_path(src_c: &CString, dst_c: &CString) -> io::Result<()> {
+        let src = Path::new(std::ffi::OsStr::from_bytes(src_c.as_bytes()));
+        let dst = Path::new(std::ffi::OsStr::from_bytes(dst_c.as_bytes()));
+        clone_tree(src, dst)
+    }
+
+    fn clone_tree(src: &Path, dst: &Path) -> io::Result<()> {
+        let meta = fs::symlink_metadata(src)?;
+        let ft = meta.file_type();
+        if ft.is_file() {
+            clone_file(src, dst).map_err(map_unsupported_fs)
+        } else if ft.is_dir() {
+            fs::create_dir(dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                clone_tree(&src.join(&name), &dst.join(&name))?;
+            }
+            Ok(())
+        } else if ft.is_symlink() {
+            let target = fs::read_link(src)?;
+            symlink_unix(target, dst)
+        } else {
+            // FIFOs, sockets, block/char devices: not part of a working tree
+            // in any practical sense; skip silently.
+            Ok(())
+        }
+    }
+
+    fn clone_file(src: &Path, dst: &Path) -> io::Result<()> {
+        let src_f = fs::File::open(src)?;
+        let dst_f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)?;
+        let ret = unsafe { libc::ioctl(dst_f.as_raw_fd(), FICLONE, src_f.as_raw_fd()) };
+        if ret == 0 {
             Ok(())
         } else {
-            // `io::Error::other` was stabilized in Rust 1.74. MSRV is the same
-            // as ivk-cli (>= 1.74), so this is safe on every supported toolchain.
-            Err(io::Error::other("cp --reflink failed"))
+            // Clean up the empty file we just created so the caller doesn't
+            // see a half-cloned state.
+            let err = io::Error::last_os_error();
+            let _ = fs::remove_file(dst);
+            Err(err)
+        }
+    }
+
+    /// Map `EOPNOTSUPP` / `EINVAL` from FICLONE into a human-actionable
+    /// message. These are the errors users hit on ext4 or other
+    /// non-reflink filesystems.
+    fn map_unsupported_fs(e: io::Error) -> io::Error {
+        match e.raw_os_error() {
+            Some(libc::EOPNOTSUPP) | Some(libc::EINVAL) | Some(libc::ENOTTY) => {
+                io::Error::other(format!(
+                    "{} — the destination filesystem does not support reflink. \
+                     ivk works on macOS APFS and on Linux btrfs / xfs (reflink=1) / \
+                     zfs ≥ 2.2 / bcachefs. ext4 is unsupported; \
+                     see docs/portability.md for the planned overlayfs fallback.",
+                    e
+                ))
+            }
+            _ => e,
         }
     }
 
     pub fn strategy() -> &'static str {
-        "linux-reflink-via-cp"
+        "linux-ficlone"
     }
 }
 
