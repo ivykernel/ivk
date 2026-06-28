@@ -42,8 +42,9 @@ jobs:
         run: cargo build --workspace --release
 
       - name: cargo test
-        # Linux can't reflink on default ext4; skip integration tests there
-        # until we add a btrfs/xfs runner. The macOS job covers the full suite.
+        # On Linux runners the default tmpdir is ext4 (no reflink), so the
+        # integration tests would fail. The `linux-btrfs` job below mounts a
+        # loopback btrfs FS and runs the same integration tests there.
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             cargo test --workspace --lib --release
@@ -70,6 +71,69 @@ jobs:
           git init -q -b main
           mkdir -p src
           echo 'hello' > src/main.rs
+          git -c user.email=ci@ivk -c user.name=ci add -A
+          git -c user.email=ci@ivk -c user.name=ci commit -q -m initial
+          "$IVK" new ci-1 --json | grep -q '"ok": true'
+          cd .ivk/workspaces/ci-1
+          "$IVK" doctor --agent --json | grep -q '"workspace_status": "clean"'
+          echo 'edit' >> src/main.rs
+          "$IVK" doctor --agent --json | grep -q '"workspace_status": "dirty"'
+
+  linux-btrfs:
+    # Validates the Linux backend's native FICLONE path on a real btrfs FS.
+    # ubuntu-latest comes with btrfs-progs preinstalled and supports mounting
+    # loopback btrfs without privileged escalation (the runner is already root).
+    name: ubuntu-latest / linux-btrfs (FICLONE)
+    runs-on: ubuntu-latest
+    needs: rust  # don't bother if the basic build is broken
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --workspace --release
+
+      - name: Set up loopback btrfs at /mnt/btrfs
+        run: |
+          set -euxo pipefail
+          # ubuntu-latest has mkfs.btrfs in btrfs-progs; install if missing.
+          if ! command -v mkfs.btrfs >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq btrfs-progs
+          fi
+          sudo dd if=/dev/zero of=/tmp/btrfs.img bs=1M count=512 status=none
+          sudo mkfs.btrfs -q /tmp/btrfs.img
+          sudo mkdir -p /mnt/btrfs
+          sudo mount /tmp/btrfs.img /mnt/btrfs
+          sudo chown -R "$USER" /mnt/btrfs
+          mount | grep -E '^/(dev|tmp).+btrfs' | head -3
+          df -hT /mnt/btrfs | head -3
+
+      - name: cargo test on btrfs (integration suite)
+        env:
+          TMPDIR: /mnt/btrfs
+        run: cargo test --workspace --release
+
+      - name: Smoke test (linux-ficlone end-to-end on btrfs)
+        env:
+          TMPDIR: /mnt/btrfs
+        run: |
+          set -euo pipefail
+          IVK="$PWD/target/release/ivk"
+          "$IVK" --version
+          # Confirm doctor reports the linux-ficlone strategy.
+          "$IVK" doctor --agent --json | grep -q '"strategy": "linux-ficlone"'
+
+          # End-to-end workspace lifecycle on btrfs.
+          mkdir -p /mnt/btrfs/ci-repo
+          cd /mnt/btrfs/ci-repo
+          git init -q -b main
+          mkdir -p src && echo 'hello' > src/main.rs
           git -c user.email=ci@ivk -c user.name=ci add -A
           git -c user.email=ci@ivk -c user.name=ci commit -q -m initial
           "$IVK" new ci-1 --json | grep -q '"ok": true'
