@@ -1,5 +1,13 @@
 # Ivy Kernel — Build Artifact Sharing Spike Plan
 
+> **STATUS: DONE (2026-06-25).** Headline cells: TS Vite at N=50 shows
+> ivk consuming **8×** less disk than git worktree even with `pnpm build`
+> running per workspace; Rust Cargo at N=5 shows **700×** less disk and
+> **200×** less rebuild time because clonefile preserves cargo's
+> fingerprint cache. Full numbers + recommendations:
+> [`results/build-summary.md`](./results/build-summary.md). This doc is
+> retained as the spike's design record.
+
 ## Purpose
 
 The [working-tree spike](./ivk_benchmark_spike.md) proved that **filesystem-level CoW** (APFS clonefile / reflink) makes N parallel workspaces cheap on disk for the *source files*. It explicitly did **not** measure what happens once each workspace runs a build.

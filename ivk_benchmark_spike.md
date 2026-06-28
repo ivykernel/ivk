@@ -1,5 +1,12 @@
 # Ivy Kernel — Benchmark Spike Plan
 
+> **STATUS: DONE (2026-06-25).** Headline result: clonefile + git-worktree
+> hybrid wins on disk by **55–65×** and on create time by **5×** vs
+> `git worktree`. Full numbers + tables: [`results/summary.md`](./results/summary.md).
+> The decision rule in §"Pass/fail criteria" returned the "cheap pitch
+> holds" outcome and Phase 0 was built around the validated primitive.
+> This doc is retained as the spike's design record.
+
 ## Purpose
 
 Before building any of the `ivk` CLI, kernel, registry, or agent-readability layer, validate the core technical premise:
