@@ -26,7 +26,7 @@ pub use git::{
 };
 pub use materializer::{default_strategy, CopyMaterializer, CowMaterializer, Materializer};
 pub use registry::{
-    BeginCreate, ChangesetRecord, Registry, RegistryError, SyncReport, WorkspaceRecord,
+    BeginCreate, ChangesetRecord, PendingOp, Registry, RegistryError, SyncReport, WorkspaceRecord,
     WorkspaceState,
 };
 pub use workspace::{remove_workspace, RemoveWorkspaceError};
@@ -45,6 +45,11 @@ pub struct MaterializeOptions {
     /// If true, also set up `.git` worktree admin + populate the index from HEAD.
     /// If false, the workspace is a plain directory of files with no git affordance.
     pub with_git: bool,
+    /// Base the workspace on this revision instead of HEAD. Requires
+    /// `with_git`. The working tree is CoW-cloned from the source as usual,
+    /// then only the paths that differ between HEAD and `rev` are rewritten
+    /// (ignored files — caches, build artifacts — survive the fixup).
+    pub rev: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +60,9 @@ pub struct MaterializeReport {
     pub git_worktree_add: Option<Duration>,
     pub clone_tree: Duration,
     pub git_read_tree: Option<Duration>,
+    /// Time spent aligning the cloned tree to a non-HEAD `rev` (restore +
+    /// clean). `None` when the workspace is based on HEAD.
+    pub git_fixup: Option<Duration>,
     pub total: Duration,
 }
 
@@ -124,6 +132,9 @@ pub fn materialize_workspace(opts: &MaterializeOptions) -> Result<MaterializeRep
 ///   2. For each non-`.git`/non-`.ivk` top-level entry in `src`, clone it
 ///      into `dst` via the materializer.
 ///   3. Populate `dst`'s index from HEAD so `git status` sees a clean tree.
+///   4. When `opts.rev` resolves to something other than the source HEAD:
+///      restore tracked files to `rev` and drop files untracked at `rev`
+///      (keeping ignored ones), so only the differing paths cost real disk.
 ///
 /// Steps when `opts.with_git == false`: just step 2, with `dst` created as an
 /// empty directory first. The workspace is not a git repo, just files.
@@ -140,6 +151,12 @@ pub fn materialize_workspace_with(
     if opts.dst.exists() {
         return Err(Error::DstExists(opts.dst.clone()));
     }
+    if opts.rev.is_some() && !opts.with_git {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MaterializeOptions.rev requires with_git",
+        )));
+    }
 
     let mut report = MaterializeReport {
         strategy: materializer.strategy(),
@@ -148,8 +165,21 @@ pub fn materialize_workspace_with(
         git_worktree_add: None,
         clone_tree: Duration::ZERO,
         git_read_tree: None,
+        git_fixup: None,
         total: Duration::ZERO,
     };
+
+    // Resolve a non-HEAD base up front (fails fast on a bad rev) and decide
+    // whether the cloned tree needs a fixup pass. The default HEAD path pays
+    // no extra git calls.
+    let mut fixup_needed = false;
+    let mut target = String::from("HEAD");
+    if let Some(rev) = opts.rev.as_deref() {
+        let target_sha = gitb.resolve_revision(&opts.src, rev)?;
+        let head_sha = gitb.resolve_revision(&opts.src, "HEAD")?;
+        fixup_needed = target_sha != head_sha;
+        target = target_sha;
+    }
 
     if opts.with_git {
         let t0 = Instant::now();
@@ -157,7 +187,7 @@ pub fn materialize_workspace_with(
         // against concurrent adds (see workspace::WorktreeAddLock). The
         // expensive part — materialization — stays parallel.
         let lock = workspace::WorktreeAddLock::acquire(&opts.src);
-        let added = gitb.add_worktree(&opts.src, &opts.dst, "HEAD");
+        let added = gitb.add_worktree(&opts.src, &opts.dst, &target);
         drop(lock);
         added?;
         report.git_worktree_add = Some(t0.elapsed());
@@ -195,6 +225,17 @@ pub fn materialize_workspace_with(
         let t0 = Instant::now();
         gitb.populate_index(&opts.dst, "HEAD")?;
         report.git_read_tree = Some(t0.elapsed());
+    }
+
+    if fixup_needed {
+        // The cloned files reflect the source working tree (≈ source HEAD);
+        // the index is already at `rev`. Rewrite only what differs, then
+        // drop files that don't exist at `rev` — but keep ignored paths so
+        // shared caches (node_modules, target/) survive.
+        let t0 = Instant::now();
+        gitb.restore_worktree(&opts.dst)?;
+        gitb.clean_untracked(&opts.dst, true)?;
+        report.git_fixup = Some(t0.elapsed());
     }
 
     report.total = total_t0.elapsed();

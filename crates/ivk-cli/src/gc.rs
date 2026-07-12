@@ -545,6 +545,41 @@ fn list_dirs(p: &Path) -> Vec<String> {
     v
 }
 
+/// Recursive allocated-block sum (`st_blocks` × 512). Unlike `dir_size`
+/// (apparent bytes), this reflects what the filesystem has allocated —
+/// though CoW-shared blocks still count once per workspace, so real disk
+/// growth is lower until files diverge (df is ground truth).
+pub(crate) fn dir_allocated(p: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    if !p.exists() {
+        return 0;
+    }
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![p.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let md = match fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if md.file_type().is_symlink() {
+                continue;
+            }
+            if md.is_dir() {
+                stack.push(path);
+            } else {
+                total = total.saturating_add(md.blocks().saturating_mul(512));
+            }
+        }
+    }
+    total
+}
+
 /// Recursive byte sum without external crates. Symlinks are skipped.
 pub(crate) fn dir_size(p: &Path) -> u64 {
     if !p.exists() {

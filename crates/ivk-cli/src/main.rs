@@ -27,9 +27,10 @@ Usage:
   ivk init [--agent-instructions] [--json] [--agent]
   ivk status [--json] [--agent]
   ivk doctor [--agent] [--json] [--repair]
-  ivk new <name> [<name>...] [--json] [--agent]
-  ivk ws new <name> [<name>...] [--json] [--agent]
+  ivk new <name> [<name>...] [--from <rev>] [--json] [--agent]
+  ivk ws new <name> [<name>...] [--from <rev>] [--json] [--agent]
   ivk ls   [--json] [--agent]
+  ivk du   [<name>...] [--json] [--agent]
   ivk show <name> [--json] [--agent]
   ivk diff <name> [--json]
   ivk rm   <name> [<name>...] [--json]
@@ -67,6 +68,7 @@ fn main() {
         ["new", rest @ ..] => ws_new::run(rest),
         ["ws", "new", rest @ ..] => ws_new::run(rest),
         ["ls", rest @ ..] | ["ws", "ls", rest @ ..] => ws::ls(rest),
+        ["du", rest @ ..] | ["ws", "du", rest @ ..] => ws::du(rest),
         ["show", rest @ ..] | ["ws", "show", rest @ ..] => ws::show(rest),
         ["diff", rest @ ..] | ["ws", "diff", rest @ ..] => ws::diff(rest),
         ["rm", rest @ ..] | ["ws", "rm", rest @ ..] => ws::rm(rest),

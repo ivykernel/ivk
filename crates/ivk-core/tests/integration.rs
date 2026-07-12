@@ -104,6 +104,7 @@ fn materializes_workspace_and_keeps_status_clean() {
         src: src.clone(),
         dst: dst.clone(),
         with_git: true,
+        rev: None,
     })
     .expect("materialize");
 
@@ -168,6 +169,7 @@ fn rejects_existing_destination() {
         src: src.clone(),
         dst: dst.clone(),
         with_git: true,
+        rev: None,
     })
     .expect_err("must fail because dst exists");
 
@@ -187,6 +189,7 @@ fn no_git_mode_skips_git_setup() {
         src: src.clone(),
         dst: dst.clone(),
         with_git: false,
+        rev: None,
     })
     .expect("materialize without git");
 

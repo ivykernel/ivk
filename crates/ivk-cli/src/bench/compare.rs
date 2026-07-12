@@ -192,6 +192,7 @@ fn run_ivk_arm(cwd: &Path, root: &Path, count: usize, df_before: u64) -> Arm {
             src: cwd.to_path_buf(),
             dst,
             with_git: true,
+            rev: None,
         });
         let el = t0.elapsed().as_micros();
         match r {

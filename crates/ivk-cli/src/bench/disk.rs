@@ -77,6 +77,7 @@ pub fn run(args: &[&str]) -> i32 {
             src: prelude.cwd.clone(),
             dst,
             with_git: true,
+            rev: None,
         }) {
             Ok(_) => created += 1,
             Err(e) => {

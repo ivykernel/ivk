@@ -228,6 +228,7 @@ fn materialize_with_copy_backend_and_remove_workspace() {
             src: src.clone(),
             dst: dst.clone(),
             with_git: true,
+            rev: None,
         },
     )
     .expect("materialize with copy backend");

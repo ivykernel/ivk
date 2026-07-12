@@ -139,6 +139,18 @@ pub trait GitBackend {
         binary: bool,
     ) -> Result<Vec<u8>, GitError>;
 
+    /// Paths changed by `target` (one path per entry, rename shown as the
+    /// new path).
+    fn changed_paths(&self, repo: &Path, target: DiffTarget) -> Result<Vec<String>, GitError>;
+
+    /// Restore every tracked file in `worktree` to its index state
+    /// (recreates deleted files, reverts modifications).
+    fn restore_worktree(&self, worktree: &Path) -> Result<(), GitError>;
+
+    /// Remove untracked files/directories from `worktree`. With
+    /// `keep_ignored`, ignored paths (caches, build artifacts) survive.
+    fn clean_untracked(&self, worktree: &Path, keep_ignored: bool) -> Result<(), GitError>;
+
     /// Register a new worktree at `dst` on a detached HEAD at `rev`,
     /// without checking out files (the materializer populates them).
     fn add_worktree(&self, repo: &Path, dst: &Path, rev: &str) -> Result<(), GitError>;

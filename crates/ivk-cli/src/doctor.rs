@@ -43,6 +43,12 @@ struct InFlightRow {
     state: &'static str,
 }
 
+#[derive(Serialize)]
+struct PendingOpRow {
+    kind: String,
+    workspace_name: String,
+}
+
 /// Registry ⇄ directory-layout agreement, computed at the repo root.
 #[derive(Serialize)]
 struct RegistryReport {
@@ -53,6 +59,9 @@ struct RegistryReport {
     in_flight: Vec<InFlightRow>,
     /// Rows marked `ready` whose directory no longer exists.
     stale_rows: Vec<String>,
+    /// Journaled operations that never confirmed completion (e.g. a
+    /// `ch new` killed between the commit and the metadata write).
+    pending_ops: Vec<PendingOpRow>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +69,10 @@ struct RepairReport {
     rolled_back: Vec<String>,
     completed_removals: Vec<String>,
     dropped_stale_rows: Vec<String>,
+    /// Changesets reconstructed from interrupted `ch new` operations
+    /// (the commit had landed; only the metadata write was lost).
+    recovered_changesets: Vec<String>,
+    cleared_ops: usize,
 }
 
 pub fn run(args: &[&str]) -> i32 {
@@ -175,13 +188,25 @@ pub fn run(args: &[&str]) -> i32 {
                 r.stale_rows.join(", ")
             );
         }
+        if !r.pending_ops.is_empty() {
+            println!(
+                "  pending ops:          {} ({}) — run `ivk doctor --repair`",
+                r.pending_ops.len(),
+                r.pending_ops
+                    .iter()
+                    .map(|o| format!("{}:{}", o.kind, o.workspace_name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
     if let Some(fixed) = &rep.repair {
         println!(
-            "  repaired:             {} rolled back, {} removals completed, {} stale rows dropped",
+            "  repaired:             {} rolled back, {} removals completed, {} stale rows dropped, {} changesets recovered",
             fixed.rolled_back.len(),
             fixed.completed_removals.len(),
-            fixed.dropped_stale_rows.len()
+            fixed.dropped_stale_rows.len(),
+            fixed.recovered_changesets.len()
         );
     }
     if !rep.repo_initialized {
@@ -207,11 +232,21 @@ fn classify_registry(reg: &Registry, ws_dir: &Path) -> RegistryReport {
             WorkspaceState::Ready => {}
         }
     }
+    let pending_ops = reg
+        .pending_ops()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|op| PendingOpRow {
+            kind: op.kind,
+            workspace_name: op.workspace_name,
+        })
+        .collect();
     RegistryReport {
         db_present: true,
         tracked_workspaces: rows.len(),
         in_flight,
         stale_rows,
+        pending_ops,
     }
 }
 
@@ -224,7 +259,24 @@ fn run_repair(reg: &Registry, repo_root: &Path, ws_dir: &Path) -> RepairReport {
         rolled_back: Vec::new(),
         completed_removals: Vec::new(),
         dropped_stale_rows: Vec::new(),
+        recovered_changesets: Vec::new(),
+        cleared_ops: 0,
     };
+
+    // Pending operations first: a `ch-new` op may reference a workspace the
+    // row-repair below would remove, and the committed work is recoverable
+    // only while the worktree HEAD still points at it.
+    for op in reg.pending_ops().unwrap_or_default() {
+        if op.kind == "ch-new" {
+            if let Some(id) = recover_changeset(reg, &git, repo_root, ws_dir, &op) {
+                report.recovered_changesets.push(id);
+            }
+        }
+        // Unknown kinds have nothing actionable; the row itself is cleared.
+        let _ = reg.finish_op(op.id);
+        report.cleared_ops += 1;
+    }
+
     for w in reg.workspaces().unwrap_or_default() {
         let ws_path = ws_dir.join(&w.name);
         match w.state {
@@ -252,6 +304,67 @@ fn run_repair(reg: &Registry, repo_root: &Path, ws_dir: &Path) -> RepairReport {
     report
 }
 
+/// If the journaled `ch new` actually committed (worktree HEAD moved past
+/// the recorded base) and no changeset records it, reconstruct the record
+/// and its JSON artifact from git facts. Returns the recovered id.
+fn recover_changeset(
+    reg: &Registry,
+    git: &GitCliBackend,
+    repo_root: &Path,
+    ws_dir: &Path,
+    op: &ivk_core::PendingOp,
+) -> Option<String> {
+    let base = op.base_snapshot.as_deref()?;
+    let ws_path = ws_dir.join(&op.workspace_name);
+    if !ws_path.is_dir() {
+        return None; // workspace gone; nothing to save
+    }
+    let head = git.resolve_revision(&ws_path, "HEAD").ok()?;
+    if head == base {
+        return None; // the commit never landed; nothing was lost
+    }
+    let id = format!("ch_{}", head.get(..12)?);
+    if matches!(reg.changeset(&id), Ok(Some(_))) {
+        return None; // already recorded (e.g. backfilled from a JSON artifact)
+    }
+    let touched = git
+        .changed_paths(
+            repo_root,
+            ivk_core::DiffTarget::CommitRange { base, head: &head },
+        )
+        .unwrap_or_default();
+    let rec = ivk_core::ChangesetRecord {
+        id: id.clone(),
+        workspace_name: op.workspace_name.clone(),
+        base_snapshot: base.to_string(),
+        result_snapshot: head.clone(),
+        touched_paths: touched.clone(),
+        created_at_unix: op.started_at_unix,
+        exported_branch: None,
+        exported_at_unix: None,
+    };
+    if reg.record_changeset(&rec).is_err() {
+        return None;
+    }
+    // Best-effort JSON artifact, matching the shape ch_new writes.
+    let ch_dir = repo_root.join(".ivk").join("changesets");
+    if fs::create_dir_all(&ch_dir).is_ok() {
+        let body = serde_json::json!({
+            "id": id,
+            "workspace_name": op.workspace_name,
+            "base_snapshot": base,
+            "result_snapshot": head,
+            "touched_paths": touched,
+            "created_at_unix": op.started_at_unix,
+        });
+        let _ = fs::write(
+            ch_dir.join(format!("{}.json", id)),
+            serde_json::to_string_pretty(&body).unwrap_or_default(),
+        );
+    }
+    Some(id)
+}
+
 fn workspace_name_from_admin(admin: &Path) -> Option<String> {
     // Looking for ".../.git/worktrees/<name>"
     let mut comps = admin.components().rev();
@@ -276,7 +389,11 @@ fn registry_needs_repair(r: &DoctorReport) -> bool {
     r.repair.is_none()
         && r.registry
             .as_ref()
-            .map(|reg| !reg.in_flight.is_empty() || !reg.stale_rows.is_empty())
+            .map(|reg| {
+                !reg.in_flight.is_empty()
+                    || !reg.stale_rows.is_empty()
+                    || !reg.pending_ops.is_empty()
+            })
             .unwrap_or(false)
 }
 
@@ -314,10 +431,10 @@ fn recommended_steps(r: &DoctorReport) -> Vec<String> {
         return vec![
             format!(
                 "{} interrupted operation(s) and {} stale registry row(s) detected.",
-                reg.in_flight.len(),
+                reg.in_flight.len() + reg.pending_ops.len(),
                 reg.stale_rows.len()
             ),
-            "Run `ivk doctor --repair` to roll back half-created workspaces and complete interrupted removals.".into(),
+            "Run `ivk doctor --repair` to roll back half-created workspaces, complete interrupted removals, and recover committed-but-unrecorded changesets.".into(),
         ];
     }
     if r.inside_ivk_workspace {

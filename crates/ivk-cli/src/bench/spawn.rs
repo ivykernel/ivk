@@ -82,6 +82,7 @@ pub fn run(args: &[&str]) -> i32 {
             src: prelude.cwd.clone(),
             dst: dst.clone(),
             with_git: true,
+            rev: None,
         });
         let elapsed = t0.elapsed().as_micros();
         match res {

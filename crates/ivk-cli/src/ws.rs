@@ -290,6 +290,143 @@ pub fn diff(args: &[&str]) -> i32 {
     0
 }
 
+#[derive(Serialize)]
+struct DuRow {
+    name: String,
+    apparent_bytes: u64,
+    apparent_human: String,
+    allocated_bytes: u64,
+    allocated_human: String,
+}
+
+#[derive(Serialize)]
+struct DuPayload {
+    count: usize,
+    total_apparent_bytes: u64,
+    total_apparent_human: String,
+    total_allocated_bytes: u64,
+    total_allocated_human: String,
+    /// CoW caveat: shared blocks count once per workspace here; actual disk
+    /// growth is lower until files diverge.
+    note: &'static str,
+    workspaces: Vec<DuRow>,
+}
+
+const DU_NOTE: &str = "allocated counts CoW-shared blocks once per workspace; \
+real disk growth is lower until files diverge (df is ground truth)";
+
+pub fn du(args: &[&str]) -> i32 {
+    let json = wants_json(args);
+    let agent = wants_agent(args);
+    let names: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspaces_dir = cwd.join(".ivk").join("workspaces");
+
+    let targets: Vec<String> = if names.is_empty() {
+        list_workspace_names(&workspaces_dir)
+    } else {
+        for name in &names {
+            if !workspaces_dir.join(name).is_dir() {
+                return ws_error(
+                    "ws.du",
+                    "not_found",
+                    &format!("no workspace named `{}`", name),
+                    "ivk ls",
+                    json || agent,
+                );
+            }
+        }
+        names.iter().map(|n| n.to_string()).collect()
+    };
+
+    let mut rows: Vec<DuRow> = targets
+        .iter()
+        .map(|name| {
+            let p = workspaces_dir.join(name);
+            let apparent = crate::gc::dir_size(&p);
+            let allocated = crate::gc::dir_allocated(&p);
+            DuRow {
+                name: name.clone(),
+                apparent_bytes: apparent,
+                apparent_human: human_bytes(apparent),
+                allocated_bytes: allocated,
+                allocated_human: human_bytes(allocated),
+            }
+        })
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.allocated_bytes));
+
+    let total_apparent: u64 = rows.iter().map(|r| r.apparent_bytes).sum();
+    let total_allocated: u64 = rows.iter().map(|r| r.allocated_bytes).sum();
+
+    if json || agent {
+        let steps = if agent {
+            Some(if rows.is_empty() {
+                vec!["No workspaces. Create one with `ivk new <task-name>`.".into()]
+            } else {
+                vec![
+                    format!(
+                        "{} workspace(s), {} apparent / {} allocated in total.",
+                        rows.len(),
+                        human_bytes(total_apparent),
+                        human_bytes(total_allocated)
+                    ),
+                    format!(
+                        "Largest: `{}` ({} allocated). Discard finished attempts with `ivk ws rm <name>`, then `ivk gc`.",
+                        rows[0].name, rows[0].allocated_human
+                    ),
+                ]
+            })
+        } else {
+            None
+        };
+        let env = Envelope {
+            ok: true,
+            command: "ws.du",
+            next_command: Some(if rows.is_empty() {
+                "ivk new <task-name>".into()
+            } else {
+                "ivk gc".into()
+            }),
+            recommended_next_steps: steps,
+            error: None,
+            data: DuPayload {
+                count: rows.len(),
+                total_apparent_bytes: total_apparent,
+                total_apparent_human: human_bytes(total_apparent),
+                total_allocated_bytes: total_allocated,
+                total_allocated_human: human_bytes(total_allocated),
+                note: DU_NOTE,
+                workspaces: rows,
+            },
+        };
+        print_json(&env);
+    } else if rows.is_empty() {
+        println!("0 workspaces. Create one with `ivk new <task-name>`.");
+    } else {
+        println!("{:<28} {:>12} {:>12}", "workspace", "apparent", "allocated");
+        for r in &rows {
+            println!(
+                "{:<28} {:>12} {:>12}",
+                r.name, r.apparent_human, r.allocated_human
+            );
+        }
+        println!(
+            "{:<28} {:>12} {:>12}",
+            "total",
+            human_bytes(total_apparent),
+            human_bytes(total_allocated)
+        );
+        println!("note: {}", DU_NOTE);
+    }
+    0
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BulkMode {
     All,

@@ -132,6 +132,29 @@ impl GitBackend for GitCliBackend {
         capture(cmd, "diff")
     }
 
+    fn changed_paths(&self, repo: &Path, target: DiffTarget) -> Result<Vec<String>, GitError> {
+        let mut cmd = git_in(repo);
+        cmd.args(["diff", "--name-only"]);
+        apply_target(&mut cmd, target);
+        let out = capture_string(cmd, "diff")?;
+        Ok(out.lines().map(str::to_string).collect())
+    }
+
+    fn restore_worktree(&self, worktree: &Path) -> Result<(), GitError> {
+        let mut cmd = git_in(worktree);
+        cmd.args(["checkout", "-q", "--", "."]);
+        capture(cmd, "checkout").map(|_| ())
+    }
+
+    fn clean_untracked(&self, worktree: &Path, keep_ignored: bool) -> Result<(), GitError> {
+        let mut cmd = git_in(worktree);
+        cmd.args(["clean", "-qfd"]);
+        if !keep_ignored {
+            cmd.arg("-x");
+        }
+        capture(cmd, "clean").map(|_| ())
+    }
+
     fn add_worktree(&self, repo: &Path, dst: &Path, rev: &str) -> Result<(), GitError> {
         let mut cmd = git_in(repo);
         cmd.args(["worktree", "add", "-q", "--no-checkout", "--detach"])

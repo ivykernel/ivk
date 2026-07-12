@@ -34,11 +34,31 @@ struct FailedWorkspace {
 pub fn run(args: &[&str]) -> i32 {
     let json = wants_json(args);
     let agent = wants_agent(args);
-    let names: Vec<&str> = args
-        .iter()
-        .copied()
-        .filter(|a| !a.starts_with('-'))
-        .collect();
+
+    let mut names: Vec<&str> = Vec::new();
+    let mut from: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        if a == "--from" {
+            i += 1;
+            match args.get(i) {
+                Some(v) if !v.starts_with('-') => from = Some(*v),
+                _ => {
+                    return fail(
+                        "missing_argument",
+                        "--from requires a revision (e.g. --from main~2)",
+                        "ivk help",
+                        json || agent,
+                        2,
+                    )
+                }
+            }
+        } else if !a.starts_with('-') {
+            names.push(a);
+        }
+        i += 1;
+    }
 
     if names.is_empty() {
         let msg = "ws new requires at least one workspace name";
@@ -99,7 +119,24 @@ pub fn run(args: &[&str]) -> i32 {
 
     let git = GitCliBackend::new();
     let registry = crate::reg::open_synced(&src);
-    let base_snapshot = git.resolve_revision(&src, "HEAD").ok();
+
+    // Resolve the base once: fail fast on a bad --from before any workspace
+    // is touched. An unresolvable HEAD (fresh empty repo) keeps the old
+    // behavior — each materialize reports the failure per name.
+    let base_rev = from.unwrap_or("HEAD");
+    let base_snapshot = match git.resolve_revision(&src, base_rev) {
+        Ok(sha) => Some(sha),
+        Err(_) if from.is_some() => {
+            return fail(
+                "invalid_revision",
+                &format!("cannot resolve revision `{}`", base_rev),
+                "git log --oneline -5",
+                json || agent,
+                2,
+            )
+        }
+        Err(_) => None,
+    };
 
     let mut created: Vec<CreatedWorkspace> = Vec::new();
     let mut failed: Vec<FailedWorkspace> = Vec::new();
@@ -115,6 +152,7 @@ pub fn run(args: &[&str]) -> i32 {
             src: src.clone(),
             dst: dst.clone(),
             with_git: true,
+            rev: from.map(String::from),
         };
         match materialize_workspace(&opts) {
             Ok(r) => {
@@ -217,4 +255,24 @@ pub fn run(args: &[&str]) -> i32 {
     } else {
         1
     }
+}
+
+fn fail(code: &'static str, msg: &str, next: &str, as_json: bool, exit: i32) -> i32 {
+    if as_json {
+        let env: Envelope<()> = Envelope {
+            ok: false,
+            command: "ws.new",
+            next_command: Some(next.into()),
+            recommended_next_steps: None,
+            error: Some(ErrorBlock {
+                code,
+                message: msg.into(),
+            }),
+            data: (),
+        };
+        print_json(&env);
+    } else {
+        eprintln!("ivk: {}", msg);
+    }
+    exit
 }

@@ -54,7 +54,7 @@ is non-empty, `next_command` becomes `ivk doctor --repair`. Running with
 removals, drops stale rows, and reports what it did in a `repair` block
 (`rolled_back` / `completed_removals` / `dropped_stale_rows`).
 
-## `ivk new <name> [<name>...] [--json] [--agent]`
+## `ivk new <name> [<name>...] [--from <rev>] [--json] [--agent]`
 
 Equivalent to `ivk ws new`. Creates one or more workspaces under `.ivk/workspaces/<name>/`.
 
@@ -85,6 +85,13 @@ ivk new attempt-{1,2,3}            # creates 3 workspaces in one call
 ivk new attempt-1 attempt-2        # equivalent
 ```
 
+`--from <rev>` bases the workspace on a revision other than HEAD (branch,
+tag, sha, `HEAD~2`, ...). The tree is CoW-cloned as usual, then only paths
+differing between HEAD and `<rev>` are rewritten; git-ignored files (caches,
+build artifacts) survive, so dependency sharing holds for old bases too. A
+revision that does not resolve fails fast with `error.code =
+"invalid_revision"` before any workspace is touched.
+
 Common errors:
 
 | code | meaning | recovery |
@@ -96,13 +103,22 @@ Common errors:
 
 Fully qualified form. Use this in scripts where ambiguity matters.
 
+## `ivk ws du [<name>...] [--json] [--agent]`
+
+Storage estimation per workspace (alias: `ivk du`). Reports `apparent`
+(byte sum) and `allocated` (filesystem blocks) per workspace plus totals,
+sorted largest-first. CoW caveat: shared blocks count once per workspace
+here, so real disk growth is lower until files diverge — `df` is ground
+truth. `--agent` names the largest workspace and suggests `ivk ws rm` +
+`ivk gc`.
+
 ## Exit codes
 
 - `0` — success
 - `1` — runtime error (file system, git invocation, etc.)
 - `2` — usage error (bad arguments)
 
-## Phase 1+ (planned, not yet implemented)
+## Currently implemented
 
 | command | summary |
 |---|---|
@@ -110,12 +126,33 @@ Fully qualified form. Use this in scripts where ambiguity matters.
 | `ivk init --agent-instructions` | also generate `AGENTS.md` + `skills/ivk/*` |
 | `ivk status [--json]` | one-shot summary across all workspaces |
 | `ivk ws ls [--json]` | list workspaces |
-| `ivk ws show <name|id> [--json]` | show one workspace |
-| `ivk ws diff <name|id>` | git diff vs base snapshot |
-| `ivk ws rm <name|id>` | delete a workspace |
-| `ivk ch new <name|id>` | snapshot the workspace as a changeset |
-| `ivk export <ch-id> [<branch>]` | export to a Git branch |
-| `ivk ship <name|id>` | changeset + export + push + open PR |
-| `ivk gc` | reclaim disk |
+| `ivk ws show <name> [--json]` | show one workspace |
+| `ivk ws diff <name>` | git diff vs base snapshot |
+| `ivk ws rm <name>` | delete a workspace |
+| `ivk ch new <name>` | snapshot the workspace as a changeset (auto-commits inside the worktree) |
+| `ivk ch ls [--json]` | list changesets |
+| `ivk ch show <ch-id> [--json]` | show one changeset |
+| `ivk export <ch-id> [<branch>]` | point a git branch (default `agent/<ws>`) at the changeset commit |
+| `ivk patch <ch-id> [<path>]` | write a unified-diff `.patch` file (default `./patches/<ch-id>.patch`) |
+| `ivk gc [--dry-run]` | prune orphan workspaces / git worktree admin; report `bytes_reclaimed` and `orphaned_changeset_refs` |
+| `ivk ws rm --all      [--yes] [--force] [--dry-run]` | bulk remove every workspace; dirty ones are skipped unless `--force` |
+| `ivk ws rm --exported [--yes] [--force] [--dry-run]` | remove every workspace whose HEAD equals its `refs/heads/agent/<ws>` branch |
+| `ivk bench spawn [--count N]` | materialize N workspaces from HEAD; report timings + disk delta |
+| `ivk bench compare-git-worktree [--count N]` | run both arms in randomized order; emit `comparison.lp_blurb` |
+| `ivk bench disk [--count N]` | apparent / blocks / df-delta triad + `ratios.lp_blurb` |
+| `ivk bench gc [--count N]` | synthetic gc throughput; reports `bytes_reclaimed` + `ms_per_workspace` |
+| `ivk new --from <rev>` | base workspaces on a non-HEAD revision (ignored files kept) |
+| `ivk ws du [<name>...]` | apparent + allocated bytes per workspace (alias `ivk du`) |
+| `ivk doctor --repair` | roll back / complete interrupted operations; recover unrecorded changesets |
 
-Until they exist, prefer `git` directly inside the workspace for status, diff, and commit work — the workspace IS a normal git worktree.
+## Planned, not yet implemented
+
+| command | summary |
+|---|---|
+| `ivk ship <name>` | changeset + export + push + open PR |
+| `ivk ws rm --failed` | needs test-result tracking — refuses with `unsupported_flag` today |
+| `ivk ws rm --all-discarded` | needs an exported/discarded marker — refuses with `unsupported_flag` today, use `--exported` or `--all` |
+| `ivk bench --from <rev>` | benches always run against HEAD; `ivk new --from <rev>` covers non-HEAD workspaces |
+| `ivk bench matrix` | wraps `scripts/bench/collect.sh` — dev-only, deferred to Phase 5+ |
+
+Until `ivk ship` lands, do the push/PR step manually: `git push origin <branch> && gh pr create`.

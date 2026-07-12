@@ -100,6 +100,25 @@ fn create_remove_journal_transitions() {
 }
 
 #[test]
+fn pending_op_journal_roundtrip() {
+    let root = temp_root();
+    let reg = Registry::open_at_root(&root).unwrap();
+
+    let id = reg.begin_op("ch-new", "ws-a", Some("basebase")).unwrap();
+    let ops = reg.pending_ops().unwrap();
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].id, id);
+    assert_eq!(ops[0].kind, "ch-new");
+    assert_eq!(ops[0].workspace_name, "ws-a");
+    assert_eq!(ops[0].base_snapshot.as_deref(), Some("basebase"));
+
+    reg.finish_op(id).unwrap();
+    assert!(reg.pending_ops().unwrap().is_empty());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn changeset_roundtrip_and_export_stamp() {
     let root = temp_root();
     let reg = Registry::open_at_root(&root).unwrap();

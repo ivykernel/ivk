@@ -238,6 +238,99 @@ fn changesets_survive_json_artifact_loss_and_export_is_stamped() {
     let _ = fs::remove_dir_all(&root);
 }
 
+fn rev_parse(cwd: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("spawn git");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn interrupted_ch_new_recovers_the_committed_changeset() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    run_ivk(&src, &["new", "task", "--json"]);
+    let ws = src.join(".ivk/workspaces/task");
+    fs::write(ws.join("hello.txt"), "changed\n").unwrap();
+
+    // Simulate `ivk ch new task` killed between the commit and the metadata
+    // write: journal the intent, land the commit, record nothing.
+    let base = rev_parse(&ws);
+    {
+        let reg = Registry::open_at_root(&src).unwrap();
+        reg.begin_op("ch-new", "task", Some(&base)).unwrap();
+    }
+    git(&ws, &["add", "-A"]);
+    git(&ws, &["commit", "-q", "-m", "work"]);
+    let head = rev_parse(&ws);
+    let expected_id = format!("ch_{}", &head[..12]);
+
+    let v = run_ivk(&src, &["doctor", "--json"]);
+    let ops = v["registry"]["pending_ops"].as_array().expect("ops array");
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0]["kind"], "ch-new");
+    assert_eq!(ops[0]["workspace_name"], "task");
+    assert_eq!(v["next_command"], "ivk doctor --repair");
+
+    let v = run_ivk(&src, &["doctor", "--repair", "--json"]);
+    assert!(
+        names(&v["repair"]["recovered_changesets"]).contains(&expected_id),
+        "repair must reconstruct the changeset: {}",
+        v
+    );
+
+    // The recovered changeset is fully usable: show, export, and the JSON
+    // artifact exists again.
+    let v = run_ivk(&src, &["ch", "show", &expected_id, "--json"]);
+    assert_eq!(v["workspace_name"], "task");
+    assert_eq!(v["result_snapshot"], head.as_str());
+    assert_eq!(v["touched_paths"][0], "hello.txt");
+    assert!(src
+        .join(".ivk/changesets")
+        .join(format!("{expected_id}.json"))
+        .is_file());
+    run_ivk(&src, &["export", &expected_id, "agent/task", "--json"]);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn interrupted_ch_new_before_commit_is_cleared_without_changeset() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    run_ivk(&src, &["new", "task", "--json"]);
+    let ws = src.join(".ivk/workspaces/task");
+
+    // Killed after journaling but before anything committed: HEAD == base.
+    let base = rev_parse(&ws);
+    {
+        let reg = Registry::open_at_root(&src).unwrap();
+        reg.begin_op("ch-new", "task", Some(&base)).unwrap();
+    }
+
+    let v = run_ivk(&src, &["doctor", "--repair", "--json"]);
+    assert!(
+        v["repair"]["recovered_changesets"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "nothing committed, nothing to recover: {}",
+        v
+    );
+    assert_eq!(v["repair"]["cleared_ops"], 1);
+
+    let v = run_ivk(&src, &["ch", "ls", "--json"]);
+    assert_eq!(v["count"], 0);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn registry_rebuilds_from_directory_layout_after_db_loss() {
     let root = temp_root();

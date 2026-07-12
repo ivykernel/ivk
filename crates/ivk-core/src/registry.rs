@@ -78,6 +78,20 @@ pub struct WorkspaceRecord {
     pub updated_at_unix: u64,
 }
 
+/// An operation that journaled its intent and has not confirmed completion.
+/// Found at rest, it means the process died mid-operation.
+#[derive(Debug, Clone)]
+pub struct PendingOp {
+    pub id: i64,
+    /// Operation kind; currently `"ch-new"`.
+    pub kind: String,
+    pub workspace_name: String,
+    /// State the operation started from (for `ch-new`: the worktree HEAD
+    /// before committing — HEAD advanced past it means the commit landed).
+    pub base_snapshot: Option<String>,
+    pub started_at_unix: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChangesetRecord {
     pub id: String,
@@ -132,6 +146,13 @@ CREATE TABLE IF NOT EXISTS changesets (
   created_at      INTEGER NOT NULL,
   exported_branch TEXT,
   exported_at     INTEGER
+);
+CREATE TABLE IF NOT EXISTS pending_ops (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind           TEXT NOT NULL,
+  workspace_name TEXT NOT NULL,
+  base_snapshot  TEXT,
+  started_at     INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 ";
@@ -339,6 +360,48 @@ impl Registry {
              FROM workspaces ORDER BY name",
         )?;
         let rows = stmt.query_map([], row_to_workspace)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    // ---------- operation journal ----------
+
+    /// Journal an operation's intent. Call [`Registry::finish_op`] once the
+    /// operation's effects are durably recorded; a row left behind is picked
+    /// up by `doctor --repair`.
+    pub fn begin_op(
+        &self,
+        kind: &str,
+        workspace: &str,
+        base_snapshot: Option<&str>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO pending_ops(kind, workspace_name, base_snapshot, started_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![kind, workspace, base_snapshot, now_unix()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn finish_op(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM pending_ops WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn pending_ops(&self) -> Result<Vec<PendingOp>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, workspace_name, base_snapshot, started_at
+             FROM pending_ops ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingOp {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                workspace_name: row.get(2)?,
+                base_snapshot: row.get(3)?,
+                started_at_unix: row.get::<_, i64>(4)? as u64,
+            })
+        })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 

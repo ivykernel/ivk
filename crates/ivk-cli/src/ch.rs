@@ -172,6 +172,14 @@ pub fn ch_new(args: &[&str]) -> i32 {
         );
     }
 
+    // Journal the intent before committing: a kill between the commit and
+    // the metadata write below leaves this row, and `ivk doctor --repair`
+    // reconstructs the changeset from it (base = the HEAD recorded here).
+    let registry = crate::reg::open_synced(&cwd);
+    let op_id = registry
+        .as_ref()
+        .and_then(|r| r.begin_op("ch-new", name, Some(&base_snapshot)).ok());
+
     // Commit inside the worktree — the kernel's one explicit committing op.
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -182,6 +190,14 @@ pub fn ch_new(args: &[&str]) -> i32 {
         match git.stage_all_and_commit(&ws_path, &msg, &CommitIdentity::ivk_default()) {
             Ok(sha) => sha,
             Err(e) => {
+                // add/commit failed → HEAD unchanged → clear the journal row.
+                // rev-parse failed AFTER a successful commit → keep the row
+                // so `doctor --repair` can reconstruct the changeset.
+                if e.op != "rev-parse" {
+                    if let (Some(reg), Some(op)) = (&registry, op_id) {
+                        let _ = reg.finish_op(op);
+                    }
+                }
                 let (code, message): (&'static str, &str) = match e.op {
                     "add" => ("git_add_failed", "git add -A failed"),
                     "commit" => ("git_commit_failed", "git commit failed"),
@@ -224,9 +240,13 @@ pub fn ch_new(args: &[&str]) -> i32 {
         );
     }
 
-    // Registry row (the JSON file above remains the portable artifact).
-    if let Some(reg) = crate::reg::open_synced(&cwd) {
+    // Registry row (the JSON file above remains the portable artifact),
+    // then confirm the journaled operation as complete.
+    if let Some(reg) = &registry {
         let _ = reg.record_changeset(&changeset.to_record());
+        if let Some(op) = op_id {
+            let _ = reg.finish_op(op);
+        }
     }
 
     // Pull a shortstat for the response.

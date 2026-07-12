@@ -227,26 +227,37 @@ Slice 1 (shipped):
       Measured after the fix: 100 parallel `ivk new` → 100/100 ok,
       100 consistent `ready` rows, 0 warnings, 4s wall
 
+Slice 2 (shipped):
+
+- [x] intent journal for `ch new` (`pending_ops` table): killed between the
+      commit and the metadata write → `doctor --repair` reconstructs the
+      changeset (record + JSON artifact) from the journaled base and the
+      worktree HEAD; killed before the commit → the op row is simply cleared
+- [x] `--from <rev>` for `ivk new`: worktree pinned at `<rev>`, tree
+      CoW-cloned as usual, then only paths differing from HEAD rewritten
+      (`checkout -- .` + `clean -qfd`); git-ignored caches survive, so the
+      sharing story holds for old bases; bad revisions fail fast
+      (`invalid_revision`) before anything is touched
+- [x] storage estimation: `ivk ws du [<name>...]` (alias `ivk du`) —
+      apparent + allocated bytes per workspace, largest-first, with the CoW
+      caveat spelled out; `--agent` names the biggest workspace
+- [x] repo-root `skills/ivk/cli.md` re-synced with the embedded assets copy
+      (it still described shipped commands as "planned")
+
 Remaining in Phase B:
 
-- [ ] intent journal for `ch new` (kill between commit and metadata write
-      currently leaves an unrecorded commit on the worktree)
 - [ ] per-workspace lock (supersedes today's coarse `.gc.lock`; git's
       worktree `locked` marker remains respected)
-- [ ] storage estimation: `ivk ws du` / doctor fields — apparent size vs
-      CoW-shared blocks per workspace (reuses bench `disk.rs` machinery)
 - [ ] `ivk ws rm --failed` / `--all-discarded` un-deferred: needs an explicit
       status/discard marker command on top of the registry
-- [ ] `--from <rev>` for `ivk new` (trait takes `rev`; needs the
-      restore+clean flow so cloned files match a non-HEAD base)
 - [ ] `tracing` behind `-v` / `IVK_LOG` (journal debugging wants it)
 
 Exit criteria: kill -9 during `ivk new`/`ch new` at any point → next `ivk
-doctor` explains and repairs (holds for `new`/`rm` today — verified by
-`crates/ivk-cli/tests/registry_cli.rs`; `ch new` pending); 100 parallel
-`ivk new` against one repo produce 100 consistent registry rows (**verified:
-100/100 in 4s**); both old (JSON-era) and new repos work (backfill verified
-in `registry.rs` / `registry_cli.rs` tests).
+doctor` explains and repairs (**holds — verified for `new`/`rm`/`ch new` by
+`crates/ivk-cli/tests/registry_cli.rs`**); 100 parallel `ivk new` against
+one repo produce 100 consistent registry rows (**verified: 100/100 in
+4s**); both old (JSON-era) and new repos work (backfill verified in
+`registry.rs` / `registry_cli.rs` tests).
 
 ## Phase C: Libgit2Backend (v0.3.x)
 

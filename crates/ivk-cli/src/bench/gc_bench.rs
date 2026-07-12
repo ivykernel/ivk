@@ -151,6 +151,7 @@ pub fn run(args: &[&str]) -> i32 {
             src: cwd.clone(),
             dst,
             with_git: true,
+            rev: None,
         })
         .is_ok()
         {

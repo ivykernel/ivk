@@ -54,7 +54,7 @@ is non-empty, `next_command` becomes `ivk doctor --repair`. Running with
 removals, drops stale rows, and reports what it did in a `repair` block
 (`rolled_back` / `completed_removals` / `dropped_stale_rows`).
 
-## `ivk new <name> [<name>...] [--json] [--agent]`
+## `ivk new <name> [<name>...] [--from <rev>] [--json] [--agent]`
 
 Equivalent to `ivk ws new`. Creates one or more workspaces under `.ivk/workspaces/<name>/`.
 
@@ -85,6 +85,13 @@ ivk new attempt-{1,2,3}            # creates 3 workspaces in one call
 ivk new attempt-1 attempt-2        # equivalent
 ```
 
+`--from <rev>` bases the workspace on a revision other than HEAD (branch,
+tag, sha, `HEAD~2`, ...). The tree is CoW-cloned as usual, then only paths
+differing between HEAD and `<rev>` are rewritten; git-ignored files (caches,
+build artifacts) survive, so dependency sharing holds for old bases too. A
+revision that does not resolve fails fast with `error.code =
+"invalid_revision"` before any workspace is touched.
+
 Common errors:
 
 | code | meaning | recovery |
@@ -95,6 +102,15 @@ Common errors:
 ## `ivk ws new <name>...` (same as `ivk new`)
 
 Fully qualified form. Use this in scripts where ambiguity matters.
+
+## `ivk ws du [<name>...] [--json] [--agent]`
+
+Storage estimation per workspace (alias: `ivk du`). Reports `apparent`
+(byte sum) and `allocated` (filesystem blocks) per workspace plus totals,
+sorted largest-first. CoW caveat: shared blocks count once per workspace
+here, so real disk growth is lower until files diverge — `df` is ground
+truth. `--agent` names the largest workspace and suggests `ivk ws rm` +
+`ivk gc`.
 
 ## Exit codes
 
@@ -125,6 +141,9 @@ Fully qualified form. Use this in scripts where ambiguity matters.
 | `ivk bench compare-git-worktree [--count N]` | run both arms in randomized order; emit `comparison.lp_blurb` |
 | `ivk bench disk [--count N]` | apparent / blocks / df-delta triad + `ratios.lp_blurb` |
 | `ivk bench gc [--count N]` | synthetic gc throughput; reports `bytes_reclaimed` + `ms_per_workspace` |
+| `ivk new --from <rev>` | base workspaces on a non-HEAD revision (ignored files kept) |
+| `ivk ws du [<name>...]` | apparent + allocated bytes per workspace (alias `ivk du`) |
+| `ivk doctor --repair` | roll back / complete interrupted operations; recover unrecorded changesets |
 
 ## Planned, not yet implemented
 
@@ -133,7 +152,7 @@ Fully qualified form. Use this in scripts where ambiguity matters.
 | `ivk ship <name>` | changeset + export + push + open PR |
 | `ivk ws rm --failed` | needs test-result tracking — refuses with `unsupported_flag` today |
 | `ivk ws rm --all-discarded` | needs an exported/discarded marker — refuses with `unsupported_flag` today, use `--exported` or `--all` |
-| `ivk bench --from <rev>` | non-HEAD bases — refuses today; `--from HEAD` is the only base in v0.0.1 |
+| `ivk bench --from <rev>` | benches always run against HEAD; `ivk new --from <rev>` covers non-HEAD workspaces |
 | `ivk bench matrix` | wraps `scripts/bench/collect.sh` — dev-only, deferred to Phase 5+ |
 
 Until `ivk ship` lands, do the push/PR step manually: `git push origin <branch> && gh pr create`.

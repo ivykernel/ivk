@@ -37,6 +37,7 @@ fn main() {
         src,
         dst,
         with_git: true,
+        rev: None,
     };
     match materialize_workspace(&opts) {
         Ok(r) => {
