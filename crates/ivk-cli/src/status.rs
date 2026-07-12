@@ -1,9 +1,11 @@
 //! `ivk status [--json] [--agent]` — repo-wide summary across all workspaces.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 use serde::Serialize;
+
+use ivk_core::{GitBackend, GitCliBackend};
 
 use crate::output::{print_json, wants_agent, wants_json, Envelope};
 
@@ -123,19 +125,10 @@ pub fn run(args: &[&str]) -> i32 {
     0
 }
 
-fn workspace_status(ws_path: &PathBuf) -> (&'static str, bool) {
-    use std::process::Command;
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(ws_path)
-        .args(["status", "--porcelain"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout);
-            let dirty = !s.trim().is_empty();
-            (if dirty { "dirty" } else { "clean" }, dirty)
-        }
-        _ => ("unknown", false),
+fn workspace_status(ws_path: &Path) -> (&'static str, bool) {
+    match GitCliBackend::new().status(ws_path) {
+        Ok(s) if s.is_dirty() => ("dirty", true),
+        Ok(_) => ("clean", false),
+        Err(_) => ("unknown", false),
     }
 }

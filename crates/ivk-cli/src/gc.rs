@@ -20,9 +20,10 @@
 
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Serialize;
+
+use ivk_core::{GitBackend, GitCliBackend};
 
 use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
 
@@ -157,32 +158,9 @@ pub(crate) fn compute_gc_locked(cwd: &Path, dry_run: bool) -> GcPayload {
     // Step 1: prune git's own worktree admin first (cheap, idempotent, gives us a clue list).
     let mut pruned_admin_entries: Vec<String> = Vec::new();
     if !dry_run && worktrees_admin.exists() {
-        match Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(["worktree", "prune", "--verbose"])
-            .output()
-        {
-            Ok(o) if o.status.success() => {
-                let s = String::from_utf8_lossy(&o.stdout);
-                for line in s.lines() {
-                    // Format: "Removing worktrees/<name>: <reason>"
-                    if let Some(rest) = line.trim().strip_prefix("Removing worktrees/") {
-                        if let Some(idx) = rest.find(':') {
-                            pruned_admin_entries.push(rest[..idx].to_string());
-                        }
-                    }
-                }
-            }
-            Ok(o) => {
-                warnings.push(format!(
-                    "git worktree prune exited non-zero: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
-            }
-            Err(e) => {
-                warnings.push(format!("could not spawn git worktree prune: {}", e));
-            }
+        match GitCliBackend::new().prune_worktrees(cwd) {
+            Ok(names) => pruned_admin_entries = names,
+            Err(e) => warnings.push(format!("git worktree prune failed: {}", e)),
         }
     }
 
@@ -474,29 +452,8 @@ fn classify_workspace(cwd: &Path, ws_path: &Path, name: &str) -> WorkspaceState 
 }
 
 fn remove_workspace(cwd: &Path, ws_path: &Path) -> Result<(), String> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["worktree", "remove", "--force"])
-        .arg(ws_path)
-        .status();
-    let cleaned = match status {
-        Ok(s) if s.success() => true,
-        _ => {
-            let _ = fs::remove_dir_all(ws_path);
-            !ws_path.exists()
-        }
-    };
-    if cleaned {
-        let _ = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(["worktree", "prune"])
-            .status();
-        Ok(())
-    } else {
-        Err("could not remove workspace dir".into())
-    }
+    ivk_core::remove_workspace(&GitCliBackend::new(), cwd, ws_path)
+        .map_err(|_| "could not remove workspace dir".into())
 }
 
 fn find_orphaned_changesets(cwd: &Path, removed: &[String]) -> Vec<OrphanedChangesetRef> {

@@ -17,10 +17,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use ivk_core::{CommitIdentity, DiffTarget, GitBackend, GitCliBackend};
 
 use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
 
@@ -89,9 +90,10 @@ pub fn ch_new(args: &[&str]) -> i32 {
         );
     }
 
-    let base_snapshot = match git_capture(&ws_path, &["rev-parse", "HEAD"]) {
-        Some(s) => s.trim().to_string(),
-        None => {
+    let git = GitCliBackend::new();
+    let base_snapshot = match git.resolve_revision(&ws_path, "HEAD") {
+        Ok(s) => s,
+        Err(_) => {
             return ch_error(
                 "ch.new",
                 "git_rev_parse_failed",
@@ -102,11 +104,10 @@ pub fn ch_new(args: &[&str]) -> i32 {
     };
 
     // Are there changes to commit?
-    let porcelain = git_capture(&ws_path, &["status", "--porcelain"]).unwrap_or_default();
-    let touched: Vec<String> = porcelain
-        .lines()
-        .filter_map(|l| l.get(3..).map(|s| s.to_string()))
-        .collect();
+    let touched: Vec<String> = git
+        .status(&ws_path)
+        .map(|s| s.touched_paths())
+        .unwrap_or_default();
     if touched.is_empty() {
         return ch_error(
             "ch.new",
@@ -116,40 +117,24 @@ pub fn ch_new(args: &[&str]) -> i32 {
         );
     }
 
-    // Auto-commit inside the worktree.
+    // Commit inside the worktree — the kernel's one explicit committing op.
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let msg = format!("ivk: changeset from workspace `{}` at {}", name, stamp);
-    if !run_git(&ws_path, &["add", "-A"]) {
-        return ch_error(
-            "ch.new",
-            "git_add_failed",
-            "git add -A failed",
-            json || agent,
-        );
-    }
-    if !run_git_with_committer(&ws_path, &["commit", "-q", "-m", &msg]) {
-        return ch_error(
-            "ch.new",
-            "git_commit_failed",
-            "git commit failed",
-            json || agent,
-        );
-    }
-
-    let result_snapshot = match git_capture(&ws_path, &["rev-parse", "HEAD"]) {
-        Some(s) => s.trim().to_string(),
-        None => {
-            return ch_error(
-                "ch.new",
-                "git_rev_parse_failed",
-                "could not read post-commit HEAD",
-                json || agent,
-            )
-        }
-    };
+    let result_snapshot =
+        match git.stage_all_and_commit(&ws_path, &msg, &CommitIdentity::ivk_default()) {
+            Ok(sha) => sha,
+            Err(e) => {
+                let (code, message): (&'static str, &str) = match e.op {
+                    "add" => ("git_add_failed", "git add -A failed"),
+                    "commit" => ("git_commit_failed", "git commit failed"),
+                    _ => ("git_rev_parse_failed", "could not read post-commit HEAD"),
+                };
+                return ch_error("ch.new", code, message, json || agent);
+            }
+        };
 
     let id = format!("ch_{}", &result_snapshot[..12]);
     let changeset = Changeset {
@@ -397,13 +382,10 @@ pub fn export(args: &[&str]) -> i32 {
         .unwrap_or_else(|| format!("agent/{}", c.workspace_name));
 
     // Create or update the branch ref in the source repo.
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["branch", "--force", &branch, &c.result_snapshot])
-        .status();
-    let ok = matches!(status, Ok(s) if s.success());
-    if !ok {
+    if GitCliBackend::new()
+        .create_branch(&cwd, &branch, &c.result_snapshot, true)
+        .is_err()
+    {
         return ch_error(
             "export",
             "git_branch_failed",
@@ -502,30 +484,20 @@ pub fn patch(args: &[&str]) -> i32 {
     };
 
     // Generate a unified diff between base..result snapshots.
-    let out = match Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["diff", "--binary"])
-        .arg(format!("{}..{}", c.base_snapshot, c.result_snapshot))
-        .output()
-    {
-        Ok(o) if o.status.success() => o.stdout,
-        Ok(o) => {
-            return ch_error(
-                "patch",
-                "git_diff_failed",
-                &format!(
-                    "git diff failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ),
-                json || agent,
-            )
-        }
+    let out = match GitCliBackend::new().diff_patch(
+        &cwd,
+        DiffTarget::CommitRange {
+            base: &c.base_snapshot,
+            head: &c.result_snapshot,
+        },
+        true,
+    ) {
+        Ok(bytes) => bytes,
         Err(e) => {
             return ch_error(
                 "patch",
                 "git_diff_failed",
-                &format!("could not spawn git: {}", e),
+                &format!("git diff failed: {}", e),
                 json || agent,
             )
         }
@@ -615,73 +587,9 @@ fn positional<'a>(args: &'a [&'a str]) -> Option<&'a str> {
     args.iter().copied().find(|a| !a.starts_with('-'))
 }
 
-fn run_git(cwd: &Path, args: &[&str]) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn run_git_with_committer(cwd: &Path, args: &[&str]) -> bool {
-    // Provide ivk-bot identity so the commit succeeds in environments where
-    // global git config is absent.
-    Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["-c", "user.email=ivk@ivykernel.dev", "-c", "user.name=ivk"])
-        .args(args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn git_capture(cwd: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 fn diff_stat_between(cwd: &Path, base: &str, head: &str) -> (u32, u32, u32) {
-    let out = match Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["diff", "--shortstat"])
-        .arg(format!("{}..{}", base, head))
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => return (0, 0, 0),
-    };
-    if out.is_empty() {
-        return (0, 0, 0);
-    }
-    let mut files = 0u32;
-    let mut ins = 0u32;
-    let mut del = 0u32;
-    for chunk in out.split(',') {
-        let chunk = chunk.trim();
-        let num: u32 = chunk
-            .split_whitespace()
-            .next()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(0);
-        if chunk.contains("file") {
-            files = num;
-        } else if chunk.contains("insertion") {
-            ins = num;
-        } else if chunk.contains("deletion") {
-            del = num;
-        }
-    }
-    (files, ins, del)
+    GitCliBackend::new()
+        .diff_stat(cwd, DiffTarget::CommitRange { base, head })
+        .map(|d| (d.files_changed, d.insertions, d.deletions))
+        .unwrap_or((0, 0, 0))
 }

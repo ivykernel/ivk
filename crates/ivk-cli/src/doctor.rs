@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use ivk_core::{GitBackend, GitCliBackend};
+
 use crate::output::{print_json, wants_agent, wants_json, Envelope};
 
 #[derive(Serialize, Default)]
@@ -57,10 +59,11 @@ pub fn run(args: &[&str]) -> i32 {
                     if let Some(name) = workspace_name_from_admin(&admin) {
                         inside = true;
                         ws_name = Some(name);
-                        let (status, d) = git_status_in(&cwd);
-                        dirty = d;
+                        dirty = GitCliBackend::new()
+                            .status(&cwd)
+                            .map(|s| s.is_dirty())
+                            .unwrap_or(false);
                         ws_status = Some(if dirty { "dirty" } else { "clean" });
-                        let _ = status; // reserved for future detail
                     }
                 }
             }
@@ -130,34 +133,11 @@ fn workspace_name_from_admin(admin: &Path) -> Option<String> {
     }
 }
 
-fn git_status_in(cwd: &Path) -> (String, bool) {
-    use std::process::Command;
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["status", "--porcelain"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).into_owned();
-            let dirty = !s.trim().is_empty();
-            (s, dirty)
-        }
-        _ => (String::new(), false),
-    }
-}
-
-#[cfg(target_os = "macos")]
+/// The materialization strategy the kernel would use here. Comes from the
+/// default materializer so doctor/status always agree with what `ivk new`
+/// actually reports.
 pub fn current_strategy() -> &'static str {
-    "apfs-clonefile"
-}
-#[cfg(target_os = "linux")]
-pub fn current_strategy() -> &'static str {
-    "linux-reflink-via-cp"
-}
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn current_strategy() -> &'static str {
-    "unsupported"
+    ivk_core::default_strategy()
 }
 
 fn next_command_hint(r: &DoctorReport) -> Option<String> {

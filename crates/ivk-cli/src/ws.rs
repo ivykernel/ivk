@@ -8,9 +8,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Serialize;
+
+use ivk_core::{DiffTarget, GitBackend, GitCliBackend};
 
 use crate::gc::GcLock;
 use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
@@ -261,7 +262,10 @@ pub fn diff(args: &[&str]) -> i32 {
         insertions: 0,
         deletions: 0,
     });
-    let patch = run_git_capture(&path, &["diff", "HEAD"]);
+    let patch = GitCliBackend::new()
+        .diff_patch(&path, DiffTarget::WorktreeToHead, false)
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
 
     if json || agent {
         let env = Envelope {
@@ -432,29 +436,8 @@ pub fn rm(args: &[&str]) -> i32 {
 }
 
 fn rm_one(cwd: &Path, ws_path: &Path) -> Result<(), String> {
-    let g = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["worktree", "remove", "--force"])
-        .arg(ws_path)
-        .status();
-    let cleaned = match g {
-        Ok(s) if s.success() => true,
-        _ => {
-            let _ = fs::remove_dir_all(ws_path);
-            !ws_path.exists()
-        }
-    };
-    if cleaned {
-        let _ = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(["worktree", "prune"])
-            .status();
-        Ok(())
-    } else {
-        Err("could not remove".into())
-    }
+    ivk_core::remove_workspace(&GitCliBackend::new(), cwd, ws_path)
+        .map_err(|_| "could not remove".into())
 }
 
 fn rm_bulk(mode: BulkMode, yes: bool, force: bool, dry_run: bool, json: bool, agent: bool) -> i32 {
@@ -586,11 +569,7 @@ fn rm_bulk(mode: BulkMode, yes: bool, force: bool, dry_run: bool, json: bool, ag
     }
 
     if !dry_run {
-        let _ = Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(["worktree", "prune"])
-            .status();
+        let _ = GitCliBackend::new().prune_worktrees(&cwd);
     }
 
     let bytes_after = if dry_run {
@@ -724,53 +703,20 @@ fn list_workspace_names(dir: &Path) -> Vec<String> {
 }
 
 fn workspace_head(ws_path: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(ws_path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    GitCliBackend::new().resolve_revision(ws_path, "HEAD").ok()
 }
 
 fn agent_refs(cwd: &Path) -> HashMap<String, String> {
-    let mut map: HashMap<String, String> = HashMap::new();
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args([
-            "for-each-ref",
-            "--format=%(refname:short) %(objectname)",
-            "refs/heads/agent/",
-        ])
-        .output();
-    let stdout = match out {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return map,
-    };
-    for line in String::from_utf8_lossy(&stdout).lines() {
-        let mut parts = line.split_whitespace();
-        let refname = match parts.next() {
-            Some(r) => r,
-            None => continue,
-        };
-        let sha = match parts.next() {
-            Some(s) => s,
-            None => continue,
-        };
-        if let Some(name) = refname.strip_prefix("agent/") {
-            map.insert(name.to_string(), sha.to_string());
-        }
-    }
-    map
+    let refs = GitCliBackend::new()
+        .list_refs(cwd, "refs/heads/agent/")
+        .unwrap_or_default();
+    refs.into_iter()
+        .filter_map(|r| {
+            r.name
+                .strip_prefix("agent/")
+                .map(|name| (name.to_string(), r.sha))
+        })
+        .collect()
 }
 
 fn worktree_locked(cwd: &Path, name: &str) -> bool {
@@ -875,91 +821,24 @@ fn recommended_for_ls(rows: &[WorkspaceRow]) -> Vec<String> {
 }
 
 fn git_short_head(p: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(p)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    GitCliBackend::new().resolve_revision_short(p, "HEAD").ok()
 }
 
 fn git_status_in(p: &Path) -> (&'static str, bool) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(p)
-        .args(["status", "--porcelain"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let dirty = !String::from_utf8_lossy(&o.stdout).trim().is_empty();
-            (if dirty { "dirty" } else { "clean" }, dirty)
-        }
-        _ => ("unknown", false),
+    match GitCliBackend::new().status(p) {
+        Ok(s) if s.is_dirty() => ("dirty", true),
+        Ok(_) => ("clean", false),
+        Err(_) => ("unknown", false),
     }
 }
 
 fn git_diff_stat(p: &Path) -> Option<DiffSummary> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(p)
-        .args(["diff", "--shortstat", "HEAD"])
-        .output()
+    let stat = GitCliBackend::new()
+        .diff_stat(p, DiffTarget::WorktreeToHead)
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        return Some(DiffSummary {
-            files_changed: 0,
-            insertions: 0,
-            deletions: 0,
-        });
-    }
-    // Example: " 2 files changed, 10 insertions(+), 3 deletions(-)"
-    let mut files = 0u32;
-    let mut ins = 0u32;
-    let mut del = 0u32;
-    for chunk in s.split(',') {
-        let chunk = chunk.trim();
-        let num: u32 = chunk
-            .split_whitespace()
-            .next()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(0);
-        if chunk.contains("file") {
-            files = num;
-        } else if chunk.contains("insertion") {
-            ins = num;
-        } else if chunk.contains("deletion") {
-            del = num;
-        }
-    }
     Some(DiffSummary {
-        files_changed: files,
-        insertions: ins,
-        deletions: del,
+        files_changed: stat.files_changed,
+        insertions: stat.insertions,
+        deletions: stat.deletions,
     })
-}
-
-fn run_git_capture(p: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(p)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
