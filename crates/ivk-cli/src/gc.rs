@@ -58,6 +58,8 @@ pub(crate) struct GcPayload {
     pub(crate) removed_admin: Vec<String>,
     pub(crate) skipped_locked: Vec<SkippedLocked>,
     pub(crate) orphaned_changeset_refs: Vec<OrphanedChangesetRef>,
+    /// Registry rows dropped because their workspace directory is gone.
+    pub(crate) removed_registry_rows: Vec<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) failed: Vec<GcFailure>,
 }
@@ -250,6 +252,35 @@ pub(crate) fn compute_gc_locked(cwd: &Path, dry_run: bool) -> GcPayload {
     // Step 6: changeset metadata warnings for any removed workspace name.
     let orphaned_changeset_refs = find_orphaned_changesets(cwd, &removed_workspaces);
 
+    // Step 6.5: registry reconcile — drop `ready` rows whose directory is
+    // gone (including the ones this run just removed). In-flight rows are
+    // deliberately left for `ivk doctor --repair`: gc must not roll back an
+    // operation another process may still be running.
+    let mut removed_registry_rows: Vec<String> = Vec::new();
+    if let Some(reg) = crate::reg::open_synced_if_present(cwd) {
+        if let Ok(rows) = reg.workspaces() {
+            let mut in_flight = 0usize;
+            for w in &rows {
+                match w.state {
+                    ivk_core::WorkspaceState::Ready => {
+                        if !workspaces_dir.join(&w.name).is_dir()
+                            && (dry_run || reg.delete_workspace_row(&w.name).is_ok())
+                        {
+                            removed_registry_rows.push(w.name.clone());
+                        }
+                    }
+                    _ => in_flight += 1,
+                }
+            }
+            if in_flight > 0 {
+                warnings.push(format!(
+                    "{} in-flight registry row(s) from interrupted operations; run `ivk doctor --repair`",
+                    in_flight
+                ));
+            }
+        }
+    }
+
     // Step 7: bytes accounting.
     let bytes_after = if dry_run {
         bytes_before
@@ -270,6 +301,7 @@ pub(crate) fn compute_gc_locked(cwd: &Path, dry_run: bool) -> GcPayload {
         removed_admin,
         skipped_locked,
         orphaned_changeset_refs,
+        removed_registry_rows,
         warnings,
         failed,
     }
@@ -357,6 +389,13 @@ fn print_human(p: &GcPayload) {
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
+        );
+    }
+    if !p.removed_registry_rows.is_empty() {
+        println!(
+            "  registry rows:      {} dropped ({})",
+            p.removed_registry_rows.len(),
+            p.removed_registry_rows.join(", ")
         );
     }
     println!(

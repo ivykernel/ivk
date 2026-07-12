@@ -33,6 +33,61 @@ struct Changeset {
     result_snapshot: String, // git sha after the auto-commit
     touched_paths: Vec<String>,
     created_at_unix: u64,
+    // Export stamps live in the registry; absent in the JSON artifacts
+    // written by ch_new and in pre-Phase-B files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exported_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exported_at_unix: Option<u64>,
+}
+
+impl Changeset {
+    fn to_record(&self) -> ivk_core::ChangesetRecord {
+        ivk_core::ChangesetRecord {
+            id: self.id.clone(),
+            workspace_name: self.workspace_name.clone(),
+            base_snapshot: self.base_snapshot.clone(),
+            result_snapshot: self.result_snapshot.clone(),
+            touched_paths: self.touched_paths.clone(),
+            created_at_unix: self.created_at_unix,
+            exported_branch: self.exported_branch.clone(),
+            exported_at_unix: self.exported_at_unix,
+        }
+    }
+
+    fn from_record(r: ivk_core::ChangesetRecord) -> Self {
+        Changeset {
+            id: r.id,
+            workspace_name: r.workspace_name,
+            base_snapshot: r.base_snapshot,
+            result_snapshot: r.result_snapshot,
+            touched_paths: r.touched_paths,
+            created_at_unix: r.created_at_unix,
+            exported_branch: r.exported_branch,
+            exported_at_unix: r.exported_at_unix,
+        }
+    }
+}
+
+enum LoadError {
+    NotFound,
+    BadMetadata(String),
+}
+
+/// Changeset lookup: registry first (backfilled from JSON on open), JSON
+/// file as the fallback so a repo with a broken/absent db still works.
+fn load_changeset(cwd: &Path, id: &str) -> Result<Changeset, LoadError> {
+    if let Some(reg) = crate::reg::open_synced_if_present(cwd) {
+        if let Ok(Some(rec)) = reg.changeset(id) {
+            return Ok(Changeset::from_record(rec));
+        }
+    }
+    let path = cwd
+        .join(".ivk")
+        .join("changesets")
+        .join(format!("{}.json", id));
+    let body = fs::read_to_string(&path).map_err(|_| LoadError::NotFound)?;
+    serde_json::from_str(&body).map_err(|e| LoadError::BadMetadata(e.to_string()))
 }
 
 #[derive(Serialize)]
@@ -144,6 +199,8 @@ pub fn ch_new(args: &[&str]) -> i32 {
         result_snapshot: result_snapshot.clone(),
         touched_paths: touched,
         created_at_unix: stamp,
+        exported_branch: None,
+        exported_at_unix: None,
     };
 
     // Persist metadata.
@@ -165,6 +222,11 @@ pub fn ch_new(args: &[&str]) -> i32 {
             &format!("could not write {}: {}", meta_path.display(), e),
             json || agent,
         );
+    }
+
+    // Registry row (the JSON file above remains the portable artifact).
+    if let Some(reg) = crate::reg::open_synced(&cwd) {
+        let _ = reg.record_changeset(&changeset.to_record());
     }
 
     // Pull a shortstat for the response.
@@ -210,22 +272,35 @@ pub fn ch_ls(args: &[&str]) -> i32 {
     let json = wants_json(args);
     let agent = wants_agent(args);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let ch_dir = cwd.join(".ivk").join("changesets");
 
-    let mut changesets: Vec<Changeset> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&ch_dir) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(s) = fs::read_to_string(&p) {
-                if let Ok(c) = serde_json::from_str::<Changeset>(&s) {
-                    changesets.push(c);
+    // Registry first (backfilled from the JSON artifacts on open); scan the
+    // JSON files directly only when no registry is available.
+    let mut changesets: Vec<Changeset> = match crate::reg::open_synced_if_present(&cwd) {
+        Some(reg) => reg
+            .changesets()
+            .unwrap_or_default()
+            .into_iter()
+            .map(Changeset::from_record)
+            .collect(),
+        None => {
+            let ch_dir = cwd.join(".ivk").join("changesets");
+            let mut v: Vec<Changeset> = Vec::new();
+            if let Ok(entries) = fs::read_dir(&ch_dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                        continue;
+                    }
+                    if let Ok(s) = fs::read_to_string(&p) {
+                        if let Ok(c) = serde_json::from_str::<Changeset>(&s) {
+                            v.push(c);
+                        }
+                    }
                 }
             }
+            v
         }
-    }
+    };
     changesets.sort_by_key(|c| std::cmp::Reverse(c.created_at_unix));
 
     if json || agent {
@@ -276,13 +351,9 @@ pub fn ch_show(args: &[&str]) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let path = cwd
-        .join(".ivk")
-        .join("changesets")
-        .join(format!("{}.json", id));
-    let body = match fs::read_to_string(&path) {
-        Ok(b) => b,
-        Err(_) => {
+    let c = match load_changeset(&cwd, id) {
+        Ok(c) => c,
+        Err(LoadError::NotFound) => {
             return ch_error(
                 "ch.show",
                 "not_found",
@@ -290,10 +361,7 @@ pub fn ch_show(args: &[&str]) -> i32 {
                 json || agent,
             )
         }
-    };
-    let c: Changeset = match serde_json::from_str(&body) {
-        Ok(c) => c,
-        Err(e) => {
+        Err(LoadError::BadMetadata(e)) => {
             return ch_error(
                 "ch.show",
                 "bad_metadata",
@@ -350,13 +418,9 @@ pub fn export(args: &[&str]) -> i32 {
     };
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let path = cwd
-        .join(".ivk")
-        .join("changesets")
-        .join(format!("{}.json", id));
-    let body = match fs::read_to_string(&path) {
-        Ok(b) => b,
-        Err(_) => {
+    let c = match load_changeset(&cwd, id) {
+        Ok(c) => c,
+        Err(LoadError::NotFound) => {
             return ch_error(
                 "export",
                 "not_found",
@@ -364,10 +428,7 @@ pub fn export(args: &[&str]) -> i32 {
                 json || agent,
             )
         }
-    };
-    let c: Changeset = match serde_json::from_str(&body) {
-        Ok(c) => c,
-        Err(e) => {
+        Err(LoadError::BadMetadata(e)) => {
             return ch_error(
                 "export",
                 "bad_metadata",
@@ -392,6 +453,11 @@ pub fn export(args: &[&str]) -> i32 {
             &format!("git branch --force {} {} failed", branch, c.result_snapshot),
             json || agent,
         );
+    }
+
+    // Stamp the export so `ch show` / future selectors can see it.
+    if let Some(reg) = crate::reg::open_synced(&cwd) {
+        let _ = reg.mark_exported(&c.id, &branch);
     }
 
     if json || agent {
@@ -456,13 +522,9 @@ pub fn patch(args: &[&str]) -> i32 {
     };
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let meta_path = cwd
-        .join(".ivk")
-        .join("changesets")
-        .join(format!("{}.json", id));
-    let body = match fs::read_to_string(&meta_path) {
-        Ok(b) => b,
-        Err(_) => {
+    let c = match load_changeset(&cwd, id) {
+        Ok(c) => c,
+        Err(LoadError::NotFound) => {
             return ch_error(
                 "patch",
                 "not_found",
@@ -470,10 +532,7 @@ pub fn patch(args: &[&str]) -> i32 {
                 json || agent,
             )
         }
-    };
-    let c: Changeset = match serde_json::from_str(&body) {
-        Ok(c) => c,
-        Err(e) => {
+        Err(LoadError::BadMetadata(e)) => {
             return ch_error(
                 "patch",
                 "bad_metadata",

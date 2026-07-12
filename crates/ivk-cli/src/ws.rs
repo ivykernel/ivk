@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use ivk_core::{DiffTarget, GitBackend, GitCliBackend};
+use ivk_core::{DiffTarget, GitBackend, GitCliBackend, Registry};
 
 use crate::gc::GcLock;
 use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
@@ -19,6 +19,8 @@ use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
 #[derive(Serialize)]
 struct WorkspaceRow {
     name: String,
+    /// Registry lifecycle state (`creating` / `ready` / `removing`).
+    state: &'static str,
     status: &'static str,
     has_changes: bool,
     file_count: Option<u64>,
@@ -94,7 +96,8 @@ pub fn ls(args: &[&str]) -> i32 {
     let agent = wants_agent(args);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dir = cwd.join(".ivk").join("workspaces");
-    let workspaces = read_workspaces(&dir);
+    let registry = crate::reg::open_synced_if_present(&cwd);
+    let workspaces = read_workspaces(&dir, registry.as_ref());
     let count = workspaces.len();
 
     if json || agent {
@@ -368,6 +371,7 @@ pub fn rm(args: &[&str]) -> i32 {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspaces_dir = cwd.join(".ivk").join("workspaces");
+    let registry = crate::reg::open_synced_if_present(&cwd);
 
     let mut removed: Vec<String> = Vec::new();
     let mut failed: Vec<RmFailure> = Vec::new();
@@ -380,8 +384,18 @@ pub fn rm(args: &[&str]) -> i32 {
             });
             continue;
         }
+        // Journal the removal; an interrupted run leaves a `removing` row
+        // that `ivk doctor --repair` completes.
+        if let Some(reg) = &registry {
+            let _ = reg.begin_remove(name);
+        }
         match rm_one(&cwd, &path) {
-            Ok(()) => removed.push((*name).to_string()),
+            Ok(()) => {
+                if let Some(reg) = &registry {
+                    let _ = reg.finish_remove(name);
+                }
+                removed.push((*name).to_string())
+            }
             Err(reason) => failed.push(RmFailure {
                 name: (*name).to_string(),
                 reason,
@@ -524,6 +538,7 @@ fn rm_bulk(mode: BulkMode, yes: bool, force: bool, dry_run: bool, json: bool, ag
     let mut removed: Vec<String> = Vec::new();
     let mut skipped: Vec<RmSkipped> = Vec::new();
     let mut failed: Vec<RmFailure> = Vec::new();
+    let registry = crate::reg::open_synced_if_present(&cwd);
 
     for name in &candidates {
         let ws_path = workspaces_dir.join(name);
@@ -559,8 +574,16 @@ fn rm_bulk(mode: BulkMode, yes: bool, force: bool, dry_run: bool, json: bool, ag
             removed.push(name.clone());
             continue;
         }
+        if let Some(reg) = &registry {
+            let _ = reg.begin_remove(name);
+        }
         match rm_one(&cwd, &ws_path) {
-            Ok(()) => removed.push(name.clone()),
+            Ok(()) => {
+                if let Some(reg) = &registry {
+                    let _ = reg.finish_remove(name);
+                }
+                removed.push(name.clone())
+            }
             Err(reason) => failed.push(RmFailure {
                 name: name.clone(),
                 reason,
@@ -772,7 +795,19 @@ fn positional<'a>(args: &'a [&'a str]) -> Option<&'a str> {
     args.iter().copied().find(|a| !a.starts_with('-'))
 }
 
-fn read_workspaces(dir: &Path) -> Vec<WorkspaceRow> {
+fn read_workspaces(dir: &Path, registry: Option<&Registry>) -> Vec<WorkspaceRow> {
+    // The directory layout stays the source of files; the registry is the
+    // source of lifecycle state. Dirs without a row (registry unavailable)
+    // read as `ready`.
+    let states: HashMap<String, &'static str> = registry
+        .and_then(|r| r.workspaces().ok())
+        .map(|rows| {
+            rows.into_iter()
+                .map(|w| (w.name, w.state.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut rows: Vec<WorkspaceRow> = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
         return rows;
@@ -786,6 +821,7 @@ fn read_workspaces(dir: &Path) -> Vec<WorkspaceRow> {
         let head = git_short_head(&p);
         let (status, dirty) = git_status_in(&p);
         rows.push(WorkspaceRow {
+            state: states.get(&name).copied().unwrap_or("ready"),
             name,
             status,
             has_changes: dirty,

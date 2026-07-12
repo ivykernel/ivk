@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use ivk_core::{absolutize, materialize_workspace, MaterializeOptions};
+use ivk_core::{
+    absolutize, materialize_workspace, BeginCreate, GitBackend, GitCliBackend, MaterializeOptions,
+};
 
 use crate::output::{print_json, wants_agent, wants_json, Envelope, ErrorBlock};
 
@@ -95,11 +97,20 @@ pub fn run(args: &[&str]) -> i32 {
         }
     }
 
+    let git = GitCliBackend::new();
+    let registry = crate::reg::open_synced(&src);
+    let base_snapshot = git.resolve_revision(&src, "HEAD").ok();
+
     let mut created: Vec<CreatedWorkspace> = Vec::new();
     let mut failed: Vec<FailedWorkspace> = Vec::new();
 
     for name in &names {
         let dst = workspaces_dir.join(name);
+        // Journal intent first: a SIGKILL mid-materialize leaves a `creating`
+        // row that `ivk doctor` reports and `ivk doctor --repair` rolls back.
+        let began = registry
+            .as_ref()
+            .and_then(|r| r.begin_create(name, base_snapshot.as_deref()).ok());
         let opts = MaterializeOptions {
             src: src.clone(),
             dst: dst.clone(),
@@ -107,6 +118,9 @@ pub fn run(args: &[&str]) -> i32 {
         };
         match materialize_workspace(&opts) {
             Ok(r) => {
+                if let Some(reg) = &registry {
+                    let _ = reg.mark_ready(name);
+                }
                 let rel = dst.strip_prefix(&src).unwrap_or(&dst);
                 created.push(CreatedWorkspace {
                     name: (*name).to_owned(),
@@ -117,6 +131,17 @@ pub fn run(args: &[&str]) -> i32 {
                 });
             }
             Err(e) => {
+                // Roll back what this run owns: the partial tree (never a
+                // pre-existing destination) and the journal row (only if this
+                // call inserted it).
+                if !matches!(e, ivk_core::Error::DstExists(_)) {
+                    let _ = ivk_core::remove_workspace(&git, &src, &dst);
+                }
+                if began == Some(BeginCreate::Started) {
+                    if let Some(reg) = &registry {
+                        let _ = reg.delete_workspace_row(name);
+                    }
+                }
                 failed.push(FailedWorkspace {
                     name: (*name).to_owned(),
                     reason: e.to_string(),

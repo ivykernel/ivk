@@ -192,35 +192,61 @@ removals on **stderr**, so the v0.0.x gc parser (stdout-only) left
 `pruned_admin_entries` always empty. `GitCliBackend::prune_worktrees` scans both
 streams; the field now populates as documented.
 
-## Phase B: durable core state (v0.2.x)
+## Phase B: durable core state (v0.2.x) — IN PROGRESS (slice 1 shipped)
 
 Goal: kernel state survives concurrent agents and force-kills. This is the
 "especially for mobile, add early" list from the review, built desktop-first.
 
-- [ ] `.ivk/db.sqlite` via `rusqlite` (bundled) — workspace + changeset
-      registry; WAL mode; the directory layout stays the physical source of
-      files, SQLite becomes the source of *state*
-- [ ] migration: on first run, backfill DB from directory scan +
-      `changesets/*.json` (JSON files remain as export artifacts)
-- [ ] creation journal: `ivk new` records `creating → ready`; anything found
-      mid-`creating` at startup is finished or rolled back (`ivk doctor`
-      reports it; `ivk gc` reclaims it)
-- [ ] transactional recovery after SIGKILL: every multi-step op (new, ch new,
-      rm, gc) journals intent first; `ivk doctor --repair` completes or
-      reverts
+Slice 1 (shipped):
+
+- [x] `.ivk/db.sqlite` via `rusqlite` (bundled) — workspace + changeset
+      registry (`ivk_core::registry`); WAL + busy-timeout; the directory
+      layout stays the physical source of files, SQLite becomes the source of
+      *state*. Fail-open: a registry problem warns on stderr and never blocks
+      a workspace operation.
+- [x] migration: every open backfills from the directory scan +
+      `changesets/*.json` via `INSERT OR IGNORE` (JSON files remain as
+      export artifacts; journal rows are never clobbered)
+- [x] creation journal: `ivk new` records `creating → ready`, rolls back the
+      partial tree + row on failure; `ivk ws rm` records `removing → gone`
+- [x] `ivk doctor` reports `registry.in_flight` / `registry.stale_rows` and
+      steers `next_command` to `ivk doctor --repair`, which rolls back
+      half-created workspaces, completes half-finished removals, and drops
+      stale rows (locked worktrees are left alone, with the row as evidence)
+- [x] `ivk gc` drops `ready` rows whose directory is gone
+      (`removed_registry_rows` in the payload) and warns about in-flight rows
+- [x] `ivk ls` exposes the lifecycle `state` per workspace; `ivk ch ls/show`
+      read from the registry (JSON scan only as fallback); `ivk export`
+      stamps `exported_branch` / `exported_at`
+- [x] parallel-create hardening, found by stress-testing this slice: git's
+      worktree admin races under concurrent `ivk new` *processes* (7/30
+      failed with `failed to read .git/worktrees/<n>/commondir`), and WAL
+      initialization on a brand-new db can return SQLITE_BUSY outside the
+      busy handler. Fixed with a per-repo worktree-add lock (fail-open,
+      10s timeout, stale aged out) + a bounded retry on the WAL pragma.
+      Measured after the fix: 100 parallel `ivk new` → 100/100 ok,
+      100 consistent `ready` rows, 0 warnings, 4s wall
+
+Remaining in Phase B:
+
+- [ ] intent journal for `ch new` (kill between commit and metadata write
+      currently leaves an unrecorded commit on the worktree)
 - [ ] per-workspace lock (supersedes today's coarse `.gc.lock`; git's
       worktree `locked` marker remains respected)
 - [ ] storage estimation: `ivk ws du` / doctor fields — apparent size vs
       CoW-shared blocks per workspace (reuses bench `disk.rs` machinery)
-- [ ] `ivk ws rm --failed` / `--all-discarded` un-deferred: the DB now has the
-      state (`status`, `exported_at`) that v0.0.x lacked
-- [ ] `--from <rev>` for `ivk new` (the Phase A trait already takes `rev`;
-      wire it through the CLI)
+- [ ] `ivk ws rm --failed` / `--all-discarded` un-deferred: needs an explicit
+      status/discard marker command on top of the registry
+- [ ] `--from <rev>` for `ivk new` (trait takes `rev`; needs the
+      restore+clean flow so cloned files match a non-HEAD base)
 - [ ] `tracing` behind `-v` / `IVK_LOG` (journal debugging wants it)
 
 Exit criteria: kill -9 during `ivk new`/`ch new` at any point → next `ivk
-doctor` explains and repairs; 100 parallel `ivk new` against one repo produce
-100 consistent registry rows; both old (JSON-era) and new repos work.
+doctor` explains and repairs (holds for `new`/`rm` today — verified by
+`crates/ivk-cli/tests/registry_cli.rs`; `ch new` pending); 100 parallel
+`ivk new` against one repo produce 100 consistent registry rows (**verified:
+100/100 in 4s**); both old (JSON-era) and new repos work (backfill verified
+in `registry.rs` / `registry_cli.rs` tests).
 
 ## Phase C: Libgit2Backend (v0.3.x)
 

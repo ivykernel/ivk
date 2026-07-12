@@ -28,10 +28,11 @@ Golden path:
        ivk patch  <ch-id>          # optional: write a .patch file
        # ivk ship attempt-1 (coming) — convenience: ch+export+push+gh pr create
 
-  5. Bulk cleanup:
+  5. Bulk cleanup / recovery:
        ivk gc                       # prune orphan workspaces / admin entries; report bytes reclaimed
        ivk ws rm --exported --yes   # discard workspaces already preserved on agent/<ws> branches
        ivk ws rm --all --yes        # nuclear: discard every workspace (dirty ones skipped unless --force)
+       ivk doctor --repair          # roll back half-created / complete half-removed workspaces after a crash
 
 Run `ivk help --agent` for a machine-readable workflow summary.
 Run `ivk doctor --agent --json` to check current state.

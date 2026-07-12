@@ -16,6 +16,7 @@
 
 pub mod git;
 pub mod materializer;
+pub mod registry;
 pub mod workspace;
 
 pub use git::cli::GitCliBackend;
@@ -24,6 +25,10 @@ pub use git::{
     StatusSummary,
 };
 pub use materializer::{default_strategy, CopyMaterializer, CowMaterializer, Materializer};
+pub use registry::{
+    BeginCreate, ChangesetRecord, Registry, RegistryError, SyncReport, WorkspaceRecord,
+    WorkspaceState,
+};
 pub use workspace::{remove_workspace, RemoveWorkspaceError};
 
 use std::fs;
@@ -148,7 +153,13 @@ pub fn materialize_workspace_with(
 
     if opts.with_git {
         let t0 = Instant::now();
-        gitb.add_worktree(&opts.src, &opts.dst, "HEAD")?;
+        // Serialize the add per repo: git's worktree admin setup races
+        // against concurrent adds (see workspace::WorktreeAddLock). The
+        // expensive part — materialization — stays parallel.
+        let lock = workspace::WorktreeAddLock::acquire(&opts.src);
+        let added = gitb.add_worktree(&opts.src, &opts.dst, "HEAD");
+        drop(lock);
+        added?;
         report.git_worktree_add = Some(t0.elapsed());
     } else {
         fs::create_dir_all(&opts.dst)?;

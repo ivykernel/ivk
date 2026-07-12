@@ -7,9 +7,69 @@
 
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::git::GitBackend;
+
+/// Advisory file lock serializing `git worktree add` per repository.
+///
+/// git's worktree admin setup races against itself when N processes add
+/// worktrees to the same repo simultaneously (observed: `fatal: failed to
+/// read .git/worktrees/<name>/commondir` at ~30 parallel `ivk new`
+/// processes). The add itself takes milliseconds, so serializing it costs
+/// nothing while materialization stays fully parallel.
+///
+/// Fail-open: if the lock cannot be acquired within the timeout, the caller
+/// proceeds unlocked — a rare git race beats deadlocking every agent.
+pub(crate) struct WorktreeAddLock {
+    path: PathBuf,
+}
+
+const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
+
+impl WorktreeAddLock {
+    /// Lock file lives inside `.git/` next to git's own transient locks.
+    pub(crate) fn acquire(repo: &Path) -> Option<Self> {
+        let path = repo.join(".git").join("ivk-worktree-add.lock");
+        let deadline = std::time::Instant::now() + LOCK_TIMEOUT;
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Some(Self { path }),
+                Err(_) => {
+                    // A holder that died leaves the file behind; age it out.
+                    if let Ok(md) = fs::metadata(&path) {
+                        if let Ok(age) = md.modified().and_then(|m| {
+                            std::time::SystemTime::now()
+                                .duration_since(m)
+                                .map_err(|e| std::io::Error::other(e.to_string()))
+                        }) {
+                            if age >= LOCK_STALE_AFTER {
+                                let _ = fs::remove_file(&path);
+                                continue;
+                            }
+                        }
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return None; // fail-open
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for WorktreeAddLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 /// Workspace removal failed even after the filesystem fallback.
 #[derive(Debug)]

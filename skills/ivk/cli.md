@@ -10,7 +10,7 @@ Prints the binary version (e.g. `ivk 0.0.1`). No JSON.
 
 Prints the golden path. With `--agent` returns the workflow as JSON with `next_command` pointing at `ivk doctor --agent --json`.
 
-## `ivk doctor [--agent] [--json]`
+## `ivk doctor [--agent] [--json] [--repair]`
 
 The "git status" for ivk. Returns current state of the cwd:
 
@@ -32,6 +32,27 @@ The "git status" for ivk. Returns current state of the cwd:
 ```
 
 When inside a workspace, `workspace_name` and `workspace_status` (`clean` | `dirty`) are populated. Recovery hints land in `next_command` and `recommended_next_steps`.
+
+At a repo root with `.ivk/`, the response also carries a `registry` block
+describing the SQLite state registry (`.ivk/db.sqlite`):
+
+```json
+{
+  "registry": {
+    "db_present": true,
+    "tracked_workspaces": 3,
+    "in_flight": [ { "name": "ghost", "state": "creating" } ],
+    "stale_rows": [ "vanished" ]
+  }
+}
+```
+
+`in_flight` rows are interrupted operations (a killed `ivk new` / `ivk ws
+rm`); `stale_rows` are registry entries whose directory is gone. When either
+is non-empty, `next_command` becomes `ivk doctor --repair`. Running with
+`--repair` rolls back half-created workspaces, completes half-finished
+removals, drops stale rows, and reports what it did in a `repair` block
+(`rolled_back` / `completed_removals` / `dropped_stale_rows`).
 
 ## `ivk new <name> [<name>...] [--json] [--agent]`
 

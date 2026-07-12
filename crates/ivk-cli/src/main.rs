@@ -11,6 +11,7 @@ mod gc;
 mod help;
 mod init;
 mod output;
+mod reg;
 mod status;
 mod ws;
 mod ws_new;
@@ -25,7 +26,7 @@ Usage:
   ivk help [--agent]
   ivk init [--agent-instructions] [--json] [--agent]
   ivk status [--json] [--agent]
-  ivk doctor [--agent] [--json]
+  ivk doctor [--agent] [--json] [--repair]
   ivk new <name> [<name>...] [--json] [--agent]
   ivk ws new <name> [<name>...] [--json] [--agent]
   ivk ls   [--json] [--agent]

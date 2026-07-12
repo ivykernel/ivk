@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use ivk_core::{GitBackend, GitCliBackend};
+use ivk_core::{GitBackend, GitCliBackend, Registry, WorkspaceState};
 
 use crate::output::{print_json, wants_agent, wants_json, Envelope};
 
@@ -31,6 +31,35 @@ struct DoctorReport {
     has_changes: bool,
     repo_root: String,
     strategy: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry: Option<RegistryReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repair: Option<RepairReport>,
+}
+
+#[derive(Serialize)]
+struct InFlightRow {
+    name: String,
+    state: &'static str,
+}
+
+/// Registry ⇄ directory-layout agreement, computed at the repo root.
+#[derive(Serialize)]
+struct RegistryReport {
+    db_present: bool,
+    tracked_workspaces: usize,
+    /// Rows journaled `creating` / `removing` — evidence of an interrupted
+    /// operation (SIGKILL, crash) that `--repair` rolls back or completes.
+    in_flight: Vec<InFlightRow>,
+    /// Rows marked `ready` whose directory no longer exists.
+    stale_rows: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct RepairReport {
+    rolled_back: Vec<String>,
+    completed_removals: Vec<String>,
+    dropped_stale_rows: Vec<String>,
 }
 
 pub fn run(args: &[&str]) -> i32 {
@@ -70,6 +99,18 @@ pub fn run(args: &[&str]) -> i32 {
         }
     }
 
+    // Registry health (only meaningful at a repo root that has .ivk/).
+    let repair_requested = args.contains(&"--repair");
+    let mut registry_report: Option<RegistryReport> = None;
+    let mut repair_report: Option<RepairReport> = None;
+    if let Some(reg) = crate::reg::open_synced_if_present(&cwd) {
+        let ws_dir = cwd.join(".ivk").join("workspaces");
+        if repair_requested {
+            repair_report = Some(run_repair(&reg, &cwd, &ws_dir));
+        }
+        registry_report = Some(classify_registry(&reg, &ws_dir));
+    }
+
     let rep = DoctorReport {
         repo_initialized: dot_git.exists(),
         inside_ivk_workspace: inside,
@@ -79,6 +120,8 @@ pub fn run(args: &[&str]) -> i32 {
         has_changes: dirty,
         repo_root: cwd.display().to_string(),
         strategy: current_strategy(),
+        registry: registry_report,
+        repair: repair_report,
     };
 
     let json = wants_json(args);
@@ -112,12 +155,101 @@ pub fn run(args: &[&str]) -> i32 {
         );
     }
     println!("  strategy:             {}", rep.strategy);
+    if let Some(r) = &rep.registry {
+        println!("  registry:             {} tracked", r.tracked_workspaces);
+        if !r.in_flight.is_empty() {
+            println!(
+                "  in-flight rows:       {} ({}) — run `ivk doctor --repair`",
+                r.in_flight.len(),
+                r.in_flight
+                    .iter()
+                    .map(|x| format!("{}:{}", x.name, x.state))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !r.stale_rows.is_empty() {
+            println!(
+                "  stale rows:           {} ({}) — run `ivk doctor --repair` or `ivk gc`",
+                r.stale_rows.len(),
+                r.stale_rows.join(", ")
+            );
+        }
+    }
+    if let Some(fixed) = &rep.repair {
+        println!(
+            "  repaired:             {} rolled back, {} removals completed, {} stale rows dropped",
+            fixed.rolled_back.len(),
+            fixed.completed_removals.len(),
+            fixed.dropped_stale_rows.len()
+        );
+    }
     if !rep.repo_initialized {
         println!("\nNo git repo here. Initialize with `git init` first.");
     } else if !rep.ivk_dir_present && !rep.inside_ivk_workspace {
         println!("\nTip: run `ivk new <task-name>` to create your first workspace.");
     }
     0
+}
+
+fn classify_registry(reg: &Registry, ws_dir: &Path) -> RegistryReport {
+    let rows = reg.workspaces().unwrap_or_default();
+    let mut in_flight: Vec<InFlightRow> = Vec::new();
+    let mut stale_rows: Vec<String> = Vec::new();
+    for w in &rows {
+        let dir_exists = ws_dir.join(&w.name).is_dir();
+        match w.state {
+            WorkspaceState::Creating | WorkspaceState::Removing => in_flight.push(InFlightRow {
+                name: w.name.clone(),
+                state: w.state.as_str(),
+            }),
+            WorkspaceState::Ready if !dir_exists => stale_rows.push(w.name.clone()),
+            WorkspaceState::Ready => {}
+        }
+    }
+    RegistryReport {
+        db_present: true,
+        tracked_workspaces: rows.len(),
+        in_flight,
+        stale_rows,
+    }
+}
+
+/// Complete or roll back interrupted operations, then drop stale rows.
+/// A directory that survives the removal attempt (e.g. a locked worktree)
+/// keeps its journal row as evidence.
+fn run_repair(reg: &Registry, repo_root: &Path, ws_dir: &Path) -> RepairReport {
+    let git = GitCliBackend::new();
+    let mut report = RepairReport {
+        rolled_back: Vec::new(),
+        completed_removals: Vec::new(),
+        dropped_stale_rows: Vec::new(),
+    };
+    for w in reg.workspaces().unwrap_or_default() {
+        let ws_path = ws_dir.join(&w.name);
+        match w.state {
+            WorkspaceState::Creating | WorkspaceState::Removing => {
+                if ws_path.exists() {
+                    let _ = ivk_core::remove_workspace(&git, repo_root, &ws_path);
+                    if ws_path.exists() {
+                        continue; // could not clean (e.g. locked); keep the row
+                    }
+                }
+                let _ = reg.delete_workspace_row(&w.name);
+                if w.state == WorkspaceState::Creating {
+                    report.rolled_back.push(w.name);
+                } else {
+                    report.completed_removals.push(w.name);
+                }
+            }
+            WorkspaceState::Ready => {
+                if !ws_path.is_dir() && reg.delete_workspace_row(&w.name).is_ok() {
+                    report.dropped_stale_rows.push(w.name);
+                }
+            }
+        }
+    }
+    report
 }
 
 fn workspace_name_from_admin(admin: &Path) -> Option<String> {
@@ -140,9 +272,20 @@ pub fn current_strategy() -> &'static str {
     ivk_core::default_strategy()
 }
 
+fn registry_needs_repair(r: &DoctorReport) -> bool {
+    r.repair.is_none()
+        && r.registry
+            .as_ref()
+            .map(|reg| !reg.in_flight.is_empty() || !reg.stale_rows.is_empty())
+            .unwrap_or(false)
+}
+
 fn next_command_hint(r: &DoctorReport) -> Option<String> {
     if !r.repo_initialized {
         return Some("git init".into());
+    }
+    if registry_needs_repair(r) {
+        return Some("ivk doctor --repair".into());
     }
     if r.inside_ivk_workspace {
         if r.has_changes {
@@ -165,6 +308,17 @@ fn next_command_hint(r: &DoctorReport) -> Option<String> {
 fn recommended_steps(r: &DoctorReport) -> Vec<String> {
     if !r.repo_initialized {
         return vec!["Initialize a git repo here first: `git init`".into()];
+    }
+    if registry_needs_repair(r) {
+        let reg = r.registry.as_ref().unwrap();
+        return vec![
+            format!(
+                "{} interrupted operation(s) and {} stale registry row(s) detected.",
+                reg.in_flight.len(),
+                reg.stale_rows.len()
+            ),
+            "Run `ivk doctor --repair` to roll back half-created workspaces and complete interrupted removals.".into(),
+        ];
     }
     if r.inside_ivk_workspace {
         let name = r.workspace_name.clone().unwrap_or_else(|| "<this>".into());
