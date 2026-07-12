@@ -15,9 +15,9 @@ Ivy Kernel makes 100 parallel working trees fit in the disk of one
 
 ## Status
 
-**Phase 0 (in progress).** The kernel materialization primitive is implemented and benchmarked. The CLI exposes `ivk new`, `ivk doctor`, `ivk help`, plus their `--agent --json` variants. Workspace lifecycle commands (`ws ls / show / diff / rm`) and changeset commands are next.
+**v0.0.2 shipped** (Homebrew tap live, full workspace/changeset/gc lifecycle, 44 tests green). The MVP plan ([v2](./ivk_mvp_to_launch_plan_v2.md)) is complete.
 
-See [`ivk_mvp_to_launch_plan_v2.md`](./ivk_mvp_to_launch_plan_v2.md) for the full roadmap with checkable progress.
+Current work: evolving `ivk` from a CLI tool into a **workspace kernel usable from multiple frontends** (desktop CLI today; an iOS frontend via libgit2 + FFI next). See [`ivk_workspace_kernel_plan_v3.md`](./ivk_workspace_kernel_plan_v3.md) for the reorganized roadmap.
 
 ## Why
 
@@ -120,4 +120,4 @@ Dual-licensed under MIT or Apache-2.0.
 
 ## Roadmap pointer
 
-The full roadmap, with checkable progress, lives in [`ivk_mvp_to_launch_plan_v2.md`](./ivk_mvp_to_launch_plan_v2.md).
+The active roadmap (multi-frontend workspace kernel: backend traits, SQLite state, libgit2, iOS FFI) lives in [`ivk_workspace_kernel_plan_v3.md`](./ivk_workspace_kernel_plan_v3.md). The completed MVP plan is preserved in [`ivk_mvp_to_launch_plan_v2.md`](./ivk_mvp_to_launch_plan_v2.md).

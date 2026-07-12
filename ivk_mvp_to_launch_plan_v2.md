@@ -1,5 +1,10 @@
 # Ivy Kernel (`ivk`) MVP-to-Launch Plan v2
 
+> **Status: complete — superseded by [`ivk_workspace_kernel_plan_v3.md`](./ivk_workspace_kernel_plan_v3.md).**
+> This document remains the record of the shipped v0.0.x MVP. The active
+> roadmap (multi-frontend workspace kernel) is v3; the items deferred here are
+> re-slotted into v3 phases (see its "v2 deferred items" table).
+
 ## Purpose
 
 This document defines a practical development plan for **Ivy Kernel (`ivk`)**, a parallel workspace kernel for AI agents.
