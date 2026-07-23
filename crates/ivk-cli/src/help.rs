@@ -22,8 +22,9 @@ Golden path:
        ivk ws diff attempt-1
        ivk ws rm   attempt-1
 
-  4. Create a changeset and export to a Git branch:
+  4. Create a changeset, check it merges, and export to a Git branch:
        ivk ch new attempt-1
+       ivk ch check <ch-id>        # conflict status vs HEAD (or: ivk ch check <ch-id> main)
        ivk export <ch-id> agent/<task>
        ivk patch  <ch-id>          # optional: write a .patch file
        # ivk ship attempt-1 (coming) — convenience: ch+export+push+gh pr create
@@ -56,6 +57,7 @@ pub fn run(args: &[&str]) -> i32 {
                 "cd .ivk/workspaces/<task-name> and do the work inside.",
                 "Tests pass: `ivk ch new <task-name>` to record a changeset.",
                 "Tests fail: `ivk ws rm <task-name>` to discard.",
+                "Before exporting: `ivk ch check <ch-id>` — clean means safe to export; on conflicts rebase the workspace and re-run `ivk ch new`.",
                 "Export with `ivk export <ch-id> agent/<task-name>` — never `git push` from inside a workspace directly.",
                 "Bulk cleanup: `ivk gc` reports bytes reclaimed; `ivk ws rm --exported --yes` discards already-preserved workspaces; `ivk ws rm --all --yes` discards everything.",
             ],

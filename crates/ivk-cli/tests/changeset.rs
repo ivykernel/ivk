@@ -200,6 +200,72 @@ fn phase3_changeset_export_patch_roundtrip() {
 }
 
 #[test]
+fn ch_check_reports_clean_then_conflict_after_target_moves() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    run_ivk(&src, &["new", "attempt-1"]);
+    let ws = src.join(".ivk/workspaces/attempt-1");
+    fs::write(ws.join("hello.txt"), "hello from workspace\n").unwrap();
+
+    let out = run_ivk(&src, &["ch", "new", "attempt-1", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ch new JSON");
+    let ch_id = v["id"].as_str().expect("id").to_string();
+
+    // Target unchanged since the workspace was cut: clean against HEAD.
+    let out = run_ivk(&src, &["ch", "check", &ch_id, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ch check JSON");
+    assert_eq!(v["ok"], serde_json::Value::Bool(true), "check not ok");
+    assert_eq!(v["clean"], serde_json::Value::Bool(true));
+    assert_eq!(v["target_ref"], serde_json::Value::String("HEAD".into()));
+    assert!(v["conflict_paths"].as_array().unwrap().is_empty());
+    assert_eq!(
+        v["merged_tree"].as_str().expect("merged_tree").len(),
+        40,
+        "merged_tree must be a tree oid"
+    );
+
+    // main moves with a competing edit to the same file: conflict, exit 0.
+    fs::write(src.join("hello.txt"), "hello from main\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "competing edit"]);
+
+    let out = run_ivk(&src, &["ch", "check", &ch_id, "main", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ch check JSON");
+    assert_eq!(
+        v["ok"],
+        serde_json::Value::Bool(true),
+        "a conflicted check is a successful check"
+    );
+    assert_eq!(v["clean"], serde_json::Value::Bool(false));
+    assert_eq!(v["target_ref"], serde_json::Value::String("main".into()));
+    let paths: Vec<&str> = v["conflict_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["hello.txt"]);
+
+    // The verdict is recorded in the registry as the latest check.
+    let reg = ivk_core::Registry::open_if_present(&src)
+        .expect("open registry")
+        .expect("registry exists");
+    let rec = reg.latest_check(&ch_id).unwrap().expect("check recorded");
+    assert!(!rec.clean);
+    assert_eq!(rec.target_ref, "main");
+    assert_eq!(rec.conflict_paths, vec!["hello.txt"]);
+
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&src)
+        .args(["worktree", "remove", "--force"])
+        .arg(&ws)
+        .status();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn ch_new_errors_when_nothing_changed() {
     let root = temp_root();
     let src = make_src_repo(&root);

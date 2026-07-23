@@ -106,6 +106,18 @@ struct ChLsPayload {
 }
 
 #[derive(Serialize)]
+struct ChCheckPayload {
+    changeset_id: String,
+    target_ref: String,
+    target_snapshot: String,
+    clean: bool,
+    conflict_paths: Vec<String>,
+    /// Tree oid of the merge result — with `clean`, a future integration
+    /// step can `git commit-tree` it without redoing the merge.
+    merged_tree: String,
+}
+
+#[derive(Serialize)]
 struct ExportPayload {
     changeset_id: String,
     branch: String,
@@ -257,13 +269,13 @@ pub fn ch_new(args: &[&str]) -> i32 {
         let env = Envelope {
             ok: true,
             command: "ch.new",
-            next_command: Some(format!("ivk export {} agent/{}", id, name)),
+            next_command: Some(format!("ivk ch check {}", id)),
             recommended_next_steps: if agent {
                 Some(vec![
                     format!("Changeset {} created from workspace {}.", id, name),
                     format!(
-                        "Export to a Git branch: `ivk export {} agent/{}`.",
-                        id, name
+                        "Check it merges cleanly: `ivk ch check {}`, then export: `ivk export {} agent/{}`.",
+                        id, id, name
                     ),
                 ])
             } else {
@@ -283,7 +295,7 @@ pub fn ch_new(args: &[&str]) -> i32 {
             "created changeset {} from workspace {} ({} files, +{} -{})",
             id, name, files_changed, insertions, deletions
         );
-        println!("  next: ivk export {} agent/{}", id, name);
+        println!("  next: ivk ch check {}", id);
     }
     0
 }
@@ -412,6 +424,173 @@ pub fn ch_show(args: &[&str]) -> i32 {
         if c.touched_paths.len() > 10 {
             println!("    ... and {} more", c.touched_paths.len() - 10);
         }
+    }
+    0
+}
+
+/// `ivk ch check <id> [<target-rev>]` — does the changeset merge cleanly
+/// onto `target-rev` (default `HEAD` of the source repo)? A pure
+/// object-store check via merge-tree: no working tree, no workspace, no
+/// side effects beyond recording the fact in the registry. Exit 0 for both
+/// verdicts — a conflict is a successful check, not an error.
+pub fn check(args: &[&str]) -> i32 {
+    let json = wants_json(args);
+    let agent = wants_agent(args);
+    let positionals: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    let (id, target_ref) = match positionals.as_slice() {
+        [id, target] => (*id, *target),
+        [id] => (*id, "HEAD"),
+        _ => {
+            return ch_error(
+                "ch.check",
+                "missing_argument",
+                "ch check requires a changeset id (and optionally a target rev, default HEAD)",
+                json || agent,
+            )
+        }
+    };
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let c = match load_changeset(&cwd, id) {
+        Ok(c) => c,
+        Err(LoadError::NotFound) => {
+            return ch_error(
+                "ch.check",
+                "not_found",
+                &format!("no changeset `{}`", id),
+                json || agent,
+            )
+        }
+        Err(LoadError::BadMetadata(e)) => {
+            return ch_error(
+                "ch.check",
+                "bad_metadata",
+                &format!("invalid changeset metadata: {}", e),
+                json || agent,
+            )
+        }
+    };
+
+    let git = GitCliBackend::new();
+    let target_snapshot = match git.resolve_revision(&cwd, target_ref) {
+        Ok(s) => s,
+        Err(_) => {
+            return ch_error(
+                "ch.check",
+                "git_rev_parse_failed",
+                &format!("could not resolve target rev `{}`", target_ref),
+                json || agent,
+            )
+        }
+    };
+
+    let merge = match git.merge_check(&cwd, &c.base_snapshot, &target_snapshot, &c.result_snapshot)
+    {
+        Ok(m) => m,
+        Err(e) => {
+            return ch_error(
+                "ch.check",
+                "git_merge_tree_failed",
+                &format!("{}", e),
+                json || agent,
+            )
+        }
+    };
+
+    // Record the fact; the check is still useful without a registry.
+    if let Some(reg) = crate::reg::open_synced(&cwd) {
+        let checked_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = reg.record_check(&ivk_core::ChangesetCheckRecord {
+            changeset_id: c.id.clone(),
+            target_ref: target_ref.to_string(),
+            target_snapshot: target_snapshot.clone(),
+            clean: merge.clean,
+            conflict_paths: merge.conflict_paths.clone(),
+            checked_at_unix: checked_at,
+        });
+    }
+
+    let target_short = &target_snapshot[..12.min(target_snapshot.len())];
+    let next = if merge.clean {
+        format!("ivk export {} agent/{}", c.id, c.workspace_name)
+    } else {
+        format!("ivk ch show {}", c.id)
+    };
+    if json || agent {
+        let env = Envelope {
+            ok: true,
+            command: "ch.check",
+            next_command: Some(next),
+            recommended_next_steps: if agent {
+                Some(if merge.clean {
+                    vec![
+                        format!(
+                            "Changeset {} merges cleanly onto {} ({}).",
+                            c.id, target_ref, target_short
+                        ),
+                        format!(
+                            "Safe to export: `ivk export {} agent/{}`.",
+                            c.id, c.workspace_name
+                        ),
+                    ]
+                } else {
+                    vec![
+                        format!(
+                            "Changeset {} conflicts with {} ({}) at {} path(s): {}.",
+                            c.id,
+                            target_ref,
+                            target_short,
+                            merge.conflict_paths.len(),
+                            merge.conflict_paths.join(", ")
+                        ),
+                        format!(
+                            "If workspace `{}` still exists: `git -C .ivk/workspaces/{} rebase {}`, resolve, then `ivk ch new {}` and re-check.",
+                            c.workspace_name, c.workspace_name, target_ref, c.workspace_name
+                        ),
+                    ]
+                })
+            } else {
+                None
+            },
+            error: None,
+            data: ChCheckPayload {
+                changeset_id: c.id.clone(),
+                target_ref: target_ref.to_string(),
+                target_snapshot: target_snapshot.clone(),
+                clean: merge.clean,
+                conflict_paths: merge.conflict_paths,
+                merged_tree: merge.merged_tree,
+            },
+        };
+        print_json(&env);
+    } else if merge.clean {
+        println!(
+            "check {}: clean against {} ({})",
+            c.id, target_ref, target_short
+        );
+        println!("  next: {}", next);
+    } else {
+        println!(
+            "check {}: CONFLICT with {} ({}) — {} path(s):",
+            c.id,
+            target_ref,
+            target_short,
+            merge.conflict_paths.len()
+        );
+        for p in &merge.conflict_paths {
+            println!("    {}", p);
+        }
+        println!(
+            "  hint: rebase workspace `{}` onto {} and run `ivk ch new {}` again",
+            c.workspace_name, target_ref, c.workspace_name
+        );
     }
     0
 }
