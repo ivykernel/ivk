@@ -182,6 +182,73 @@ fn commits_diffs_and_branches_roundtrip() {
 }
 
 #[test]
+fn merge_check_reports_clean_and_conflicted_merges() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+    let git = GitCliBackend::new();
+
+    let run = |args: &[&str]| {
+        let s = Command::new("git")
+            .arg("-C")
+            .arg(&src)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(s.success(), "git {:?} failed", args);
+    };
+
+    let base = git.resolve_revision(&src, "HEAD").unwrap();
+
+    // "theirs": a changeset-style commit touching a/one.txt.
+    fs::write(src.join("a/one.txt"), "alpha\ntheirs\n").unwrap();
+    let theirs = git
+        .stage_all_and_commit(&src, "theirs", &CommitIdentity::ivk_default())
+        .unwrap();
+
+    // "ours" advanced the base on a different file — must merge cleanly.
+    run(&["checkout", "-q", "--detach", &base]);
+    fs::write(src.join("README.md"), "hello\nours\n").unwrap();
+    let ours = git
+        .stage_all_and_commit(&src, "ours", &CommitIdentity::ivk_default())
+        .unwrap();
+    let check = git
+        .merge_check(&src, &base, &ours, &theirs)
+        .expect("clean check");
+    assert!(check.clean, "disjoint edits must merge cleanly");
+    assert!(check.conflict_paths.is_empty());
+    assert_eq!(
+        check.merged_tree.len(),
+        40,
+        "tree oid: {}",
+        check.merged_tree
+    );
+
+    // "ours" touching the same line of the same file — must conflict.
+    run(&["checkout", "-q", "--detach", &base]);
+    fs::write(src.join("a/one.txt"), "alpha\nours\n").unwrap();
+    let ours2 = git
+        .stage_all_and_commit(&src, "ours2", &CommitIdentity::ivk_default())
+        .unwrap();
+    let check = git
+        .merge_check(&src, &base, &ours2, &theirs)
+        .expect("conflicted check is still Ok");
+    assert!(!check.clean);
+    assert_eq!(check.conflict_paths, vec!["a/one.txt".to_string()]);
+    assert_eq!(
+        check.merged_tree.len(),
+        40,
+        "conflicted merge still writes a tree"
+    );
+
+    // Unresolvable input is an Err, not a conflicted result.
+    assert!(git
+        .merge_check(&src, &base, "no-such-rev", &theirs)
+        .is_err());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn copy_materializer_clones_files_dirs_and_symlinks() {
     let root = temp_root();
     let src = root.join("tree");

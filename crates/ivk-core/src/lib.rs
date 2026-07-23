@@ -21,7 +21,7 @@ pub mod workspace;
 
 pub use git::cli::GitCliBackend;
 pub use git::{
-    CommitIdentity, DiffStat, DiffTarget, GitBackend, GitError, RefEntry, StatusEntry,
+    CommitIdentity, DiffStat, DiffTarget, GitBackend, GitError, MergeCheck, RefEntry, StatusEntry,
     StatusSummary,
 };
 pub use materializer::{default_strategy, CopyMaterializer, CowMaterializer, Materializer};

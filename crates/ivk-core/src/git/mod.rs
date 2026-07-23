@@ -87,6 +87,20 @@ pub struct RefEntry {
     pub sha: String,
 }
 
+/// Result of a three-way merge check ([`GitBackend::merge_check`]).
+///
+/// `merged_tree` is always a real tree object: on a conflicted merge it
+/// contains conflict markers, and `conflict_paths` says which paths did not
+/// merge cleanly.
+#[derive(Debug, Clone)]
+pub struct MergeCheck {
+    pub clean: bool,
+    /// Object id of the merged tree (usable with `commit-tree` when clean).
+    pub merged_tree: String,
+    /// Paths that conflicted, deduplicated. Empty when `clean`.
+    pub conflict_paths: Vec<String>,
+}
+
 /// Identity used for kernel-created commits when none is configured.
 #[derive(Debug, Clone)]
 pub struct CommitIdentity {
@@ -184,4 +198,17 @@ pub trait GitBackend {
 
     /// List refs under `prefix` (e.g. `"refs/heads/agent/"`) as short names.
     fn list_refs(&self, repo: &Path, prefix: &str) -> Result<Vec<RefEntry>, GitError>;
+
+    /// Three-way merge of `theirs` into `ours` using `base` as the merge
+    /// base, **without touching any working tree or index** — a pure
+    /// object-store operation, cheap enough to run against every changeset.
+    /// A conflicted result is `Ok` (see [`MergeCheck::clean`]); `Err` means
+    /// the check itself could not run.
+    fn merge_check(
+        &self,
+        repo: &Path,
+        base: &str,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<MergeCheck, GitError>;
 }

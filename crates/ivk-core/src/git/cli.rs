@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::Command;
 
 use super::{
-    CommitIdentity, DiffStat, DiffTarget, GitBackend, GitError, RefEntry, StatusEntry,
+    CommitIdentity, DiffStat, DiffTarget, GitBackend, GitError, MergeCheck, RefEntry, StatusEntry,
     StatusSummary,
 };
 
@@ -246,6 +246,67 @@ impl GitBackend for GitCliBackend {
         }
         cmd.arg(branch).arg(sha);
         capture(cmd, "branch").map(|_| ())
+    }
+
+    fn merge_check(
+        &self,
+        repo: &Path,
+        base: &str,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<MergeCheck, GitError> {
+        // `merge-tree --write-tree` (git >= 2.38; `--merge-base` >= 2.40)
+        // merges in memory. Exit 0 = clean, 1 = conflicted — both are valid
+        // results, so `capture` (which treats non-zero as failure) is out.
+        let mut cmd = git_in(repo);
+        cmd.args(["merge-tree", "--write-tree", "--name-only"])
+            .arg(format!("--merge-base={base}"))
+            .arg(ours)
+            .arg(theirs);
+        let out = cmd.output().map_err(|e| GitError {
+            op: "merge-tree",
+            message: format!("could not launch git: {e}"),
+        })?;
+        let clean = match out.status.code() {
+            Some(0) => true,
+            Some(1) => false,
+            _ => {
+                return Err(GitError {
+                    op: "merge-tree",
+                    message: format!(
+                        "exited with {}: {}",
+                        out.status,
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                })
+            }
+        };
+        // Output: merged tree oid, then (when conflicted) one path per line
+        // until a blank line; informational messages follow the blank line.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut lines = stdout.lines();
+        let merged_tree = lines
+            .next()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .ok_or_else(|| GitError {
+                op: "merge-tree",
+                message: "no tree oid in output".into(),
+            })?
+            .to_string();
+        let conflict_paths = if clean {
+            Vec::new()
+        } else {
+            lines
+                .take_while(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        Ok(MergeCheck {
+            clean,
+            merged_tree,
+            conflict_paths,
+        })
     }
 
     fn list_refs(&self, repo: &Path, prefix: &str) -> Result<Vec<RefEntry>, GitError> {
