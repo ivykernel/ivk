@@ -196,6 +196,52 @@ fn ws_du_reports_per_workspace_and_total_sizes() {
 }
 
 #[test]
+fn ws_ls_and_show_report_base_drift() {
+    let root = temp_root();
+    let src = make_two_commit_repo(&root);
+
+    run_ivk(&src, &["new", "drifty"]);
+
+    // Cut from HEAD, nothing moved yet: behind 0.
+    let out = run_ivk(&src, &["ws", "ls", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ws ls JSON");
+    let row = v["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["name"] == "drifty")
+        .expect("row for drifty");
+    assert_eq!(row["behind_head"], serde_json::Value::Number(0.into()));
+
+    // The repo HEAD advances by one commit: behind 1.
+    fs::write(src.join("drift-note.txt"), "moving on\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "advance"]);
+
+    let out = run_ivk(&src, &["ws", "ls", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ws ls JSON");
+    let row = v["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["name"] == "drifty")
+        .expect("row for drifty");
+    assert_eq!(row["behind_head"], serde_json::Value::Number(1.into()));
+
+    let out = run_ivk(&src, &["ws", "show", "drifty", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ws show JSON");
+    assert_eq!(v["behind_head"], serde_json::Value::Number(1.into()));
+
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&src)
+        .args(["worktree", "remove", "--force"])
+        .arg(src.join(".ivk/workspaces/drifty"))
+        .status();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn bad_from_rev_fails_fast_before_touching_anything() {
     let root = temp_root();
     let src = make_two_commit_repo(&root);

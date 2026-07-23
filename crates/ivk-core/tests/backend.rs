@@ -205,6 +205,11 @@ fn merge_check_reports_clean_and_conflicted_merges() {
         .stage_all_and_commit(&src, "theirs", &CommitIdentity::ivk_default())
         .unwrap();
 
+    // Drift counting piggybacks on the same commit graph.
+    assert_eq!(git.commits_ahead(&src, &base, &theirs).unwrap(), 1);
+    assert_eq!(git.commits_ahead(&src, &theirs, &base).unwrap(), 0);
+    assert!(git.commits_ahead(&src, "no-such-rev", &base).is_err());
+
     // "ours" advanced the base on a different file — must merge cleanly.
     run(&["checkout", "-q", "--detach", &base]);
     fs::write(src.join("README.md"), "hello\nours\n").unwrap();

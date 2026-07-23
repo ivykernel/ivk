@@ -248,6 +248,17 @@ impl GitBackend for GitCliBackend {
         capture(cmd, "branch").map(|_| ())
     }
 
+    fn commits_ahead(&self, repo: &Path, from: &str, to: &str) -> Result<u32, GitError> {
+        let mut cmd = git_in(repo);
+        cmd.args(["rev-list", "--count"])
+            .arg(format!("{from}..{to}"));
+        let line = single_line(cmd, "rev-list")?;
+        line.parse::<u32>().map_err(|_| GitError {
+            op: "rev-list",
+            message: format!("unexpected count output: {line}"),
+        })
+    }
+
     fn merge_check(
         &self,
         repo: &Path,

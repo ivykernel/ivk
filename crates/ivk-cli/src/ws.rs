@@ -25,6 +25,10 @@ struct WorkspaceRow {
     has_changes: bool,
     file_count: Option<u64>,
     head: Option<String>,
+    /// Commits on the source repo's HEAD that this workspace lacks. Grows as
+    /// the integration point moves; the larger it gets, the bigger a merge
+    /// conflict will grow. `None` when it could not be computed.
+    behind_head: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +46,8 @@ struct ShowPayload {
     head: Option<String>,
     status: &'static str,
     has_changes: bool,
+    /// Commits on the source repo's HEAD that this workspace lacks.
+    behind_head: Option<u32>,
     diff_summary: Option<DiffSummary>,
 }
 
@@ -97,7 +103,7 @@ pub fn ls(args: &[&str]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dir = cwd.join(".ivk").join("workspaces");
     let registry = crate::reg::open_synced_if_present(&cwd);
-    let workspaces = read_workspaces(&dir, registry.as_ref());
+    let workspaces = read_workspaces(&dir, registry.as_ref(), &cwd);
     let count = workspaces.len();
 
     if json || agent {
@@ -134,11 +140,16 @@ pub fn ls(args: &[&str]) -> i32 {
     } else {
         println!("{} workspace(s):", count);
         for w in &workspaces {
+            let drift = match w.behind_head {
+                Some(n) if n > 0 => format!("  behind={}", n),
+                _ => String::new(),
+            };
             println!(
-                "  {:<28} {:<7} head={}",
+                "  {:<28} {:<7} head={}{}",
                 w.name,
                 w.status,
-                w.head.as_deref().unwrap_or("?")
+                w.head.as_deref().unwrap_or("?"),
+                drift
             );
         }
     }
@@ -175,6 +186,8 @@ pub fn show(args: &[&str]) -> i32 {
     let head = git_short_head(&path);
     let (status, dirty) = git_status_in(&path);
     let diff_summary = git_diff_stat(&path);
+    let repo_head = GitCliBackend::new().resolve_revision(&cwd, "HEAD").ok();
+    let behind = behind_head(&cwd, head.as_deref(), repo_head.as_deref());
 
     if json || agent {
         let env = Envelope {
@@ -193,7 +206,7 @@ pub fn show(args: &[&str]) -> i32 {
                 )
             }),
             recommended_next_steps: if agent {
-                Some(if dirty {
+                let mut steps = if dirty {
                     vec![
                         "Workspace has uncommitted changes.".into(),
                         format!("Record a changeset: `ivk ch new {}`.", name),
@@ -201,7 +214,20 @@ pub fn show(args: &[&str]) -> i32 {
                     ]
                 } else {
                     vec!["Workspace is clean. cd in and start editing.".into()]
-                })
+                };
+                if let Some(n) = behind.filter(|n| *n > 0) {
+                    let target = repo_head
+                        .as_deref()
+                        .map(|s| s[..12.min(s.len())].to_string())
+                        .unwrap_or_else(|| "<repo-HEAD>".into());
+                    steps.push(format!(
+                        "Base drift: {} commit(s) behind the repo HEAD — conflicts grow with drift. Rebase soon: `git -C {} rebase {}`.",
+                        n,
+                        path.display(),
+                        target
+                    ));
+                }
+                Some(steps)
             } else {
                 None
             },
@@ -213,6 +239,7 @@ pub fn show(args: &[&str]) -> i32 {
                 head,
                 status,
                 has_changes: dirty,
+                behind_head: behind,
                 diff_summary,
             },
         };
@@ -222,6 +249,9 @@ pub fn show(args: &[&str]) -> i32 {
         println!("  path:    {}", path.display());
         println!("  head:    {}", head.as_deref().unwrap_or("?"));
         println!("  status:  {}", status);
+        if let Some(n) = behind.filter(|n| *n > 0) {
+            println!("  behind:  {} commit(s) behind repo HEAD", n);
+        }
         if let Some(d) = &diff_summary {
             println!(
                 "  diff:    {} files changed, +{} -{}",
@@ -932,7 +962,7 @@ fn positional<'a>(args: &'a [&'a str]) -> Option<&'a str> {
     args.iter().copied().find(|a| !a.starts_with('-'))
 }
 
-fn read_workspaces(dir: &Path, registry: Option<&Registry>) -> Vec<WorkspaceRow> {
+fn read_workspaces(dir: &Path, registry: Option<&Registry>, repo_root: &Path) -> Vec<WorkspaceRow> {
     // The directory layout stays the source of files; the registry is the
     // source of lifecycle state. Dirs without a row (registry unavailable)
     // read as `ready`.
@@ -945,6 +975,9 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>) -> Vec<WorkspaceRow>
         })
         .unwrap_or_default();
 
+    let repo_head = GitCliBackend::new()
+        .resolve_revision(repo_root, "HEAD")
+        .ok();
     let mut rows: Vec<WorkspaceRow> = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
         return rows;
@@ -957,6 +990,7 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>) -> Vec<WorkspaceRow>
         let name = entry.file_name().to_string_lossy().into_owned();
         let head = git_short_head(&p);
         let (status, dirty) = git_status_in(&p);
+        let behind_head = behind_head(repo_root, head.as_deref(), repo_head.as_deref());
         rows.push(WorkspaceRow {
             state: states.get(&name).copied().unwrap_or("ready"),
             name,
@@ -964,10 +998,19 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>) -> Vec<WorkspaceRow>
             has_changes: dirty,
             file_count: None, // expensive; show command computes on demand
             head,
+            behind_head,
         });
     }
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     rows
+}
+
+/// How many commits the source repo's HEAD has that the workspace lacks.
+/// Runs against the shared object store, so the workspace's (possibly
+/// short) head sha resolves fine from the repo root.
+fn behind_head(repo_root: &Path, ws_head: Option<&str>, repo_head: Option<&str>) -> Option<u32> {
+    let (ws, repo) = (ws_head?, repo_head?);
+    GitCliBackend::new().commits_ahead(repo_root, ws, repo).ok()
 }
 
 fn recommended_for_ls(rows: &[WorkspaceRow]) -> Vec<String> {
@@ -979,7 +1022,7 @@ fn recommended_for_ls(rows: &[WorkspaceRow]) -> Vec<String> {
         .filter(|w| w.has_changes)
         .map(|w| w.name.as_str())
         .collect();
-    if dirty.is_empty() {
+    let mut steps = if dirty.is_empty() {
         vec!["All workspaces clean. cd into one to start editing.".into()]
     } else {
         vec![
@@ -990,7 +1033,22 @@ fn recommended_for_ls(rows: &[WorkspaceRow]) -> Vec<String> {
             ),
             "For each: `ivk ch new <name>` if good, `ivk ws rm <name>` if not.".into(),
         ]
+    };
+    let stale: Vec<String> = rows
+        .iter()
+        .filter_map(|w| {
+            w.behind_head
+                .filter(|n| *n > 0)
+                .map(|n| format!("{} ({} behind)", w.name, n))
+        })
+        .collect();
+    if !stale.is_empty() {
+        steps.push(format!(
+            "Base drift — conflicts grow with drift, rebase or finish these soon: {}.",
+            stale.join(", ")
+        ));
     }
+    steps
 }
 
 fn git_short_head(p: &Path) -> Option<String> {

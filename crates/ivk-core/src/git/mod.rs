@@ -199,6 +199,10 @@ pub trait GitBackend {
     /// List refs under `prefix` (e.g. `"refs/heads/agent/"`) as short names.
     fn list_refs(&self, repo: &Path, prefix: &str) -> Result<Vec<RefEntry>, GitError>;
 
+    /// Number of commits reachable from `to` but not from `from` — how far
+    /// `from` is behind `to` (`git rev-list --count from..to`).
+    fn commits_ahead(&self, repo: &Path, from: &str, to: &str) -> Result<u32, GitError>;
+
     /// Three-way merge of `theirs` into `ours` using `base` as the merge
     /// base, **without touching any working tree or index** — a pure
     /// object-store operation, cheap enough to run against every changeset.
