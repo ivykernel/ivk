@@ -82,6 +82,11 @@ ivk gc --failed                         # Phase 4: discard everything that didn'
 ivk ch new fix-login
 # Output includes a changeset id like ch_01HABC.
 
+# Does it merge cleanly onto the current integration point?
+ivk ch check ch_01HABC                  # against HEAD; or: ivk ch check ch_01HABC main
+# clean => export. Conflicts => rebase the workspace onto the target,
+# resolve, then `ivk ch new fix-login` again and re-check.
+
 # Export to a Git branch.
 ivk export ch_01HABC agent/fix-login
 # A branch named agent/fix-login now points at the changeset's tree.

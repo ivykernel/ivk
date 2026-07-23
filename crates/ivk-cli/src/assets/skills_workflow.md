@@ -85,6 +85,11 @@ ivk gc                                  # prune orphan admin entries; report byt
 ivk ch new fix-login
 # Output includes a changeset id like ch_<sha12>.
 
+# Does it merge cleanly onto the current integration point?
+ivk ch check ch_<sha12>                  # against HEAD; or: ivk ch check ch_<sha12> main
+# clean => export. Conflicts => rebase the workspace onto the target,
+# resolve, then `ivk ch new fix-login` again and re-check.
+
 # Export to a Git branch.
 ivk export ch_<sha12> agent/fix-login
 # A branch named agent/fix-login now points at the changeset's commit.

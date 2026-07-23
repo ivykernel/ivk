@@ -132,6 +132,7 @@ truth. `--agent` names the largest workspace and suggests `ivk ws rm` +
 | `ivk ch new <name>` | snapshot the workspace as a changeset (auto-commits inside the worktree) |
 | `ivk ch ls [--json]` | list changesets |
 | `ivk ch show <ch-id> [--json]` | show one changeset |
+| `ivk ch check <ch-id> [<rev>] [--json]` | conflict status: does the changeset merge cleanly onto `<rev>` (default `HEAD`)? In-memory merge — no working tree touched; exit 0 for both verdicts, read `clean` / `conflict_paths` |
 | `ivk export <ch-id> [<branch>]` | point a git branch (default `agent/<ws>`) at the changeset commit |
 | `ivk patch <ch-id> [<path>]` | write a unified-diff `.patch` file (default `./patches/<ch-id>.patch`) |
 | `ivk gc [--dry-run]` | prune orphan workspaces / git worktree admin; report `bytes_reclaimed` and `orphaned_changeset_refs` |

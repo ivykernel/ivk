@@ -29,8 +29,9 @@ cd .ivk/workspaces/<short-task-name>
 
 # 4. Make changes. Run tests. Iterate.
 
-# 5. When done, (Phase 3+) record + export:
+# 5. When done, (Phase 3+) record + check + export:
 ivk ch new <short-task-name>
+ivk ch check <ch-id>              # conflict status vs HEAD; conflicts => rebase + ch new again
 ivk export <ch-id> agent/<short-task-name>
 # or:
 ivk ship <short-task-name>

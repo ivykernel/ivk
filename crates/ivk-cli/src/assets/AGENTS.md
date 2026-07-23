@@ -31,6 +31,7 @@ cd .ivk/workspaces/<short-task-name>
 
 # 5. When done, record + export:
 ivk ch new <short-task-name>
+ivk ch check <ch-id>              # conflict status vs HEAD; conflicts => rebase + ch new again
 ivk export <ch-id> agent/<short-task-name>
 # (optional) write a unified-diff patch file:
 ivk patch <ch-id>

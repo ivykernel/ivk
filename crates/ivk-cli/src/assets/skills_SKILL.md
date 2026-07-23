@@ -50,6 +50,7 @@ cd .ivk/workspaces/fix-login
 
 # 3. When the change is good:
 ivk ch new fix-login                  # snapshot the change as a changeset
+ivk ch check <ch-id>                  # merges cleanly onto HEAD? (conflicts => rebase + ch new again)
 ivk export <ch-id> agent/fix-login    # point a git branch at the result commit
 ivk patch  <ch-id>                    # (optional) emit a unified-diff .patch file
 # Coming: ivk ship fix-login          # all-in-one: changeset + export + push + open PR
