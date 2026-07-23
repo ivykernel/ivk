@@ -144,6 +144,45 @@ fn changeset_roundtrip_and_export_stamp() {
 }
 
 #[test]
+fn hotspots_rank_paths_by_distinct_changesets() {
+    let root = temp_root();
+    let reg = Registry::open_at_root(&root).unwrap();
+
+    let rec = |id: &str, ws: &str, paths: &[&str]| ChangesetRecord {
+        id: id.into(),
+        workspace_name: ws.into(),
+        base_snapshot: "a".repeat(40),
+        result_snapshot: "b".repeat(40),
+        touched_paths: paths.iter().map(|p| p.to_string()).collect(),
+        created_at_unix: 1_000,
+        exported_branch: None,
+        exported_at_unix: None,
+    };
+    reg.record_changeset(&rec("ch_1", "ws-a", &["a.rs", "shared.rs"]))
+        .unwrap();
+    reg.record_changeset(&rec("ch_2", "ws-b", &["b.rs", "shared.rs"]))
+        .unwrap();
+    reg.record_changeset(&rec("ch_3", "ws-a", &["shared.rs"]))
+        .unwrap();
+
+    let hot = reg.hotspots(2, 10).unwrap();
+    assert_eq!(hot.len(), 1, "only shared.rs crosses the threshold");
+    assert_eq!(hot[0].path, "shared.rs");
+    assert_eq!(hot[0].changeset_count, 3);
+    assert_eq!(hot[0].workspace_count, 2);
+
+    // min=1 includes single-touch paths; the hottest still ranks first.
+    let all = reg.hotspots(1, 10).unwrap();
+    assert_eq!(all[0].path, "shared.rs");
+    assert_eq!(all.len(), 3);
+
+    // limit caps the result.
+    assert_eq!(reg.hotspots(1, 2).unwrap().len(), 2);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn check_roundtrip_keeps_latest_per_changeset() {
     let root = temp_root();
     let reg = Registry::open_at_root(&root).unwrap();

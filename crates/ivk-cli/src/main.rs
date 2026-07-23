@@ -76,6 +76,7 @@ fn main() {
         ["ch", "ls", rest @ ..] => ch::ch_ls(rest),
         ["ch", "show", rest @ ..] => ch::ch_show(rest),
         ["ch", "check", rest @ ..] => ch::check(rest),
+        ["ch", "hotspots", rest @ ..] => ch::hotspots(rest),
         ["export", rest @ ..] => ch::export(rest),
         ["patch", rest @ ..] => ch::patch(rest),
         ["gc", rest @ ..] => gc::run(rest),

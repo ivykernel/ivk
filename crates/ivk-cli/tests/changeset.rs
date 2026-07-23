@@ -295,3 +295,44 @@ fn ch_new_errors_when_nothing_changed() {
         .status();
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn ch_hotspots_reports_contended_paths() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    // Two workspaces, both changesets touch hello.txt.
+    for name in ["hot-a", "hot-b"] {
+        run_ivk(&src, &["new", name]);
+        fs::write(
+            src.join(".ivk/workspaces").join(name).join("hello.txt"),
+            format!("{} edit\n", name),
+        )
+        .unwrap();
+        run_ivk(&src, &["ch", "new", name, "--json"]);
+    }
+
+    let out = run_ivk(&src, &["ch", "hotspots", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("hotspots JSON");
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+    assert_eq!(v["count"], serde_json::Value::Number(1.into()), "{}", v);
+    assert_eq!(v["hotspots"][0]["path"], "hello.txt");
+    assert_eq!(
+        v["hotspots"][0]["changeset_count"],
+        serde_json::Value::Number(2.into())
+    );
+    assert_eq!(
+        v["hotspots"][0]["workspace_count"],
+        serde_json::Value::Number(2.into())
+    );
+
+    for name in ["hot-a", "hot-b"] {
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&src)
+            .args(["worktree", "remove", "--force"])
+            .arg(src.join(".ivk/workspaces").join(name))
+            .status();
+    }
+    let _ = fs::remove_dir_all(&root);
+}

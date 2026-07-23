@@ -428,6 +428,115 @@ pub fn ch_show(args: &[&str]) -> i32 {
     0
 }
 
+#[derive(Serialize)]
+struct HotspotRow {
+    path: String,
+    changeset_count: u64,
+    workspace_count: u64,
+}
+
+#[derive(Serialize)]
+struct HotspotsPayload {
+    count: usize,
+    min_changesets: u32,
+    hotspots: Vec<HotspotRow>,
+}
+
+/// `ivk ch hotspots [--top N] [--min N]` — files that keep getting touched
+/// across changesets. High counts mean task boundaries keep crossing the
+/// same file (split it, or give it an owner) — the registry-level early
+/// warning against megafile growth.
+pub fn hotspots(args: &[&str]) -> i32 {
+    let json = wants_json(args);
+    let agent = wants_agent(args);
+    let top = flag_value(args, "--top").unwrap_or(20);
+    let min = flag_value(args, "--min").unwrap_or(2);
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let Some(reg) = crate::reg::open_synced_if_present(&cwd) else {
+        return ch_error(
+            "ch.hotspots",
+            "no_registry",
+            "no .ivk/ here — run `ivk init` (or any `ivk new`) first",
+            json || agent,
+        );
+    };
+    let rows: Vec<HotspotRow> = match reg.hotspots(min, top) {
+        Ok(v) => v
+            .into_iter()
+            .map(|h| HotspotRow {
+                path: h.path,
+                changeset_count: h.changeset_count,
+                workspace_count: h.workspace_count,
+            })
+            .collect(),
+        Err(e) => {
+            return ch_error(
+                "ch.hotspots",
+                "registry_error",
+                &format!("{}", e),
+                json || agent,
+            )
+        }
+    };
+
+    if json || agent {
+        let steps = if agent {
+            Some(if rows.is_empty() {
+                vec![format!(
+                    "No path is touched by {} or more changesets — no contention hotspots.",
+                    min
+                )]
+            } else {
+                vec![
+                    format!(
+                        "{} hotspot path(s); hottest: {} ({} changesets from {} workspace(s)).",
+                        rows.len(),
+                        rows[0].path,
+                        rows[0].changeset_count,
+                        rows[0].workspace_count
+                    ),
+                    "Repeatedly-touched files are where conflicts concentrate: consider splitting them into smaller modules or routing all tasks that touch them through one workspace.".into(),
+                ]
+            })
+        } else {
+            None
+        };
+        let env = Envelope {
+            ok: true,
+            command: "ch.hotspots",
+            next_command: Some("ivk status --agent --json".into()),
+            recommended_next_steps: steps,
+            error: None,
+            data: HotspotsPayload {
+                count: rows.len(),
+                min_changesets: min,
+                hotspots: rows,
+            },
+        };
+        print_json(&env);
+    } else if rows.is_empty() {
+        println!("no hotspots (no path touched by >= {} changesets).", min);
+    } else {
+        println!("{:<48} {:>10} {:>11}", "path", "changesets", "workspaces");
+        for r in &rows {
+            println!(
+                "{:<48} {:>10} {:>11}",
+                r.path, r.changeset_count, r.workspace_count
+            );
+        }
+    }
+    0
+}
+
+/// Parse `--flag N` from the arg list.
+fn flag_value(args: &[&str], flag: &str) -> Option<u32> {
+    args.iter()
+        .position(|a| *a == flag)
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+}
+
 /// `ivk ch check <id> [<target-rev>]` — does the changeset merge cleanly
 /// onto `target-rev` (default `HEAD` of the source repo)? A pure
 /// object-store check via merge-tree: no working tree, no workspace, no

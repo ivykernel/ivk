@@ -29,7 +29,12 @@ Golden path:
        ivk patch  <ch-id>          # optional: write a .patch file
        # ivk ship attempt-1 (coming) — convenience: ch+export+push+gh pr create
 
-  5. Bulk cleanup / recovery:
+  5. Swarm health (facts for planners):
+       ivk status --agent --json    # includes `overlaps` — paths touched by 2+ in-flight workspaces
+       ivk ch hotspots              # files touched by many changesets (split or assign an owner)
+       ivk ws ls                    # includes behind=N base drift per workspace
+
+  6. Bulk cleanup / recovery:
        ivk gc                       # prune orphan workspaces / admin entries; report bytes reclaimed
        ivk ws rm --exported --yes   # discard workspaces already preserved on agent/<ws> branches
        ivk ws rm --all --yes        # nuclear: discard every workspace (dirty ones skipped unless --force)

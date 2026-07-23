@@ -120,6 +120,19 @@ pub struct ChangesetCheckRecord {
     pub checked_at_unix: u64,
 }
 
+/// A path that keeps showing up across changesets — the registry-level
+/// early warning for contention and megafile growth: many independent
+/// changes to one file means either the file is too big or task boundaries
+/// keep crossing it.
+#[derive(Debug, Clone)]
+pub struct HotspotRecord {
+    pub path: String,
+    /// Distinct changesets that touched the path.
+    pub changeset_count: u64,
+    /// Distinct workspaces those changesets came from.
+    pub workspace_count: u64,
+}
+
 /// What `sync_from_disk` imported.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SyncReport {
@@ -507,6 +520,28 @@ impl Registry {
             ],
         )?;
         Ok(())
+    }
+
+    /// Paths touched by at least `min_changesets` distinct changesets,
+    /// hottest first. Uses SQLite's `json_each` over the stored
+    /// `touched_paths` arrays — one query, no table scan in Rust.
+    pub fn hotspots(&self, min_changesets: u32, limit: u32) -> Result<Vec<HotspotRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT je.value, COUNT(DISTINCT c.id), COUNT(DISTINCT c.workspace_name)
+             FROM changesets c, json_each(c.touched_paths) je
+             GROUP BY je.value
+             HAVING COUNT(DISTINCT c.id) >= ?1
+             ORDER BY COUNT(DISTINCT c.id) DESC, je.value
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![min_changesets, limit], |row| {
+            Ok(HotspotRecord {
+                path: row.get(0)?,
+                changeset_count: row.get::<_, i64>(1)? as u64,
+                workspace_count: row.get::<_, i64>(2)? as u64,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     /// The most recent check recorded for `changeset_id`, if any.
