@@ -104,6 +104,22 @@ pub struct ChangesetRecord {
     pub exported_at_unix: Option<u64>,
 }
 
+/// One recorded conflict check: "does this changeset merge cleanly onto
+/// this target?". A check is a fact about a *specific* target snapshot —
+/// when the target ref moves, the fact goes stale and a re-check writes a
+/// new row (one row per (changeset, target snapshot) pair).
+#[derive(Debug, Clone)]
+pub struct ChangesetCheckRecord {
+    pub changeset_id: String,
+    /// The revision the caller asked to check against (e.g. `"main"`).
+    pub target_ref: String,
+    /// What `target_ref` resolved to at check time.
+    pub target_snapshot: String,
+    pub clean: bool,
+    pub conflict_paths: Vec<String>,
+    pub checked_at_unix: u64,
+}
+
 /// What `sync_from_disk` imported.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SyncReport {
@@ -153,6 +169,15 @@ CREATE TABLE IF NOT EXISTS pending_ops (
   workspace_name TEXT NOT NULL,
   base_snapshot  TEXT,
   started_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS changeset_checks (
+  changeset_id    TEXT NOT NULL,
+  target_ref      TEXT NOT NULL,
+  target_snapshot TEXT NOT NULL,
+  clean           INTEGER NOT NULL,
+  conflict_paths  TEXT NOT NULL,
+  checked_at      INTEGER NOT NULL,
+  PRIMARY KEY (changeset_id, target_snapshot)
 );
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 ";
@@ -459,6 +484,44 @@ impl Registry {
         let rows = stmt.query_map([], row_to_changeset)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
+
+    // ---------- changeset checks ----------
+
+    /// Record a conflict check. Re-checking the same (changeset, target
+    /// snapshot) pair replaces the row — the merge result is deterministic,
+    /// only `checked_at` moves.
+    pub fn record_check(&self, c: &ChangesetCheckRecord) -> Result<()> {
+        let paths = serde_json::to_string(&c.conflict_paths)
+            .map_err(|e| RegistryError(format!("cannot serialize conflict_paths: {}", e)))?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO changeset_checks
+               (changeset_id, target_ref, target_snapshot, clean, conflict_paths, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                c.changeset_id,
+                c.target_ref,
+                c.target_snapshot,
+                c.clean,
+                paths,
+                c.checked_at_unix as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The most recent check recorded for `changeset_id`, if any.
+    pub fn latest_check(&self, changeset_id: &str) -> Result<Option<ChangesetCheckRecord>> {
+        self.conn
+            .query_row(
+                "SELECT changeset_id, target_ref, target_snapshot, clean, conflict_paths, checked_at
+                 FROM changeset_checks WHERE changeset_id = ?1
+                 ORDER BY checked_at DESC, target_snapshot LIMIT 1",
+                params![changeset_id],
+                row_to_check,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
 }
 
 fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
@@ -470,6 +533,18 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord
         base_snapshot: row.get(2)?,
         created_at_unix: row.get::<_, i64>(3)? as u64,
         updated_at_unix: row.get::<_, i64>(4)? as u64,
+    })
+}
+
+fn row_to_check(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChangesetCheckRecord> {
+    let paths_s: String = row.get(4)?;
+    Ok(ChangesetCheckRecord {
+        changeset_id: row.get(0)?,
+        target_ref: row.get(1)?,
+        target_snapshot: row.get(2)?,
+        clean: row.get(3)?,
+        conflict_paths: serde_json::from_str(&paths_s).unwrap_or_default(),
+        checked_at_unix: row.get::<_, i64>(5)? as u64,
     })
 }
 

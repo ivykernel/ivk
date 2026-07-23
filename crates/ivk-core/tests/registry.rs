@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ivk_core::{BeginCreate, ChangesetRecord, Registry, WorkspaceState};
+use ivk_core::{BeginCreate, ChangesetCheckRecord, ChangesetRecord, Registry, WorkspaceState};
 
 fn temp_root() -> PathBuf {
     let tid = std::thread::current().id();
@@ -139,6 +139,54 @@ fn changeset_roundtrip_and_export_stamp() {
     assert!(one.exported_at_unix.is_some());
     let two = reg.changeset("ch_two").unwrap().unwrap();
     assert!(two.exported_branch.is_none());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn check_roundtrip_keeps_latest_per_changeset() {
+    let root = temp_root();
+    let reg = Registry::open_at_root(&root).unwrap();
+
+    let check = |target: &str, clean: bool, at: u64| ChangesetCheckRecord {
+        changeset_id: "ch_one".into(),
+        target_ref: "main".into(),
+        target_snapshot: target.into(),
+        clean,
+        conflict_paths: if clean {
+            vec![]
+        } else {
+            vec!["src/x.rs".into()]
+        },
+        checked_at_unix: at,
+    };
+
+    assert!(reg.latest_check("ch_one").unwrap().is_none());
+
+    // First check: conflicted against target "e...e".
+    reg.record_check(&check(&"e".repeat(40), false, 1_000))
+        .unwrap();
+    let got = reg.latest_check("ch_one").unwrap().unwrap();
+    assert!(!got.clean);
+    assert_eq!(got.conflict_paths, vec!["src/x.rs"]);
+    assert_eq!(got.target_ref, "main");
+
+    // Target moved; the newer check wins latest_check.
+    reg.record_check(&check(&"f".repeat(40), true, 2_000))
+        .unwrap();
+    let got = reg.latest_check("ch_one").unwrap().unwrap();
+    assert!(got.clean);
+    assert_eq!(got.target_snapshot, "f".repeat(40));
+    assert!(got.conflict_paths.is_empty());
+
+    // Re-checking the same (changeset, target) pair replaces, not duplicates.
+    reg.record_check(&check(&"f".repeat(40), true, 3_000))
+        .unwrap();
+    let got = reg.latest_check("ch_one").unwrap().unwrap();
+    assert_eq!(got.checked_at_unix, 3_000);
+
+    // Other changesets are unaffected.
+    assert!(reg.latest_check("ch_other").unwrap().is_none());
 
     let _ = fs::remove_dir_all(&root);
 }
