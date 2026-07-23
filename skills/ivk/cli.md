@@ -124,7 +124,8 @@ truth. `--agent` names the largest workspace and suggests `ivk ws rm` +
 |---|---|
 | `ivk init` | create `.ivk/` skeleton |
 | `ivk init --agent-instructions` | also generate `AGENTS.md` + `skills/ivk/*` |
-| `ivk status [--json]` | one-shot summary across all workspaces, including predicted conflicts (`overlaps`: paths touched by 2+ in-flight workspaces) |
+| `ivk status [--json]` | one-shot summary across all workspaces, including predicted conflicts (`overlaps`: paths touched by 2+ in-flight workspaces) and `claim_violations` (in-flight paths crossing another workspace's `--claim`) |
+| `ivk new <name> --claim <prefix>` | record an advisory path claim (repeatable; segment-aware prefix, e.g. `src/auth`). Overlapping claims warn but never block — the orchestrator decides |
 | `ivk ws ls [--json]` | list workspaces |
 | `ivk ws show <name> [--json]` | show one workspace |
 | `ivk ws diff <name>` | git diff vs base snapshot |

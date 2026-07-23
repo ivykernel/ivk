@@ -144,6 +144,55 @@ fn changeset_roundtrip_and_export_stamp() {
 }
 
 #[test]
+fn claims_roundtrip_and_die_with_the_workspace() {
+    let root = temp_root();
+    let reg = Registry::open_at_root(&root).unwrap();
+
+    reg.add_claim("ws-a", "src/auth/").unwrap(); // trailing slash normalized
+    reg.add_claim("ws-a", "docs").unwrap();
+    reg.add_claim("ws-a", "docs").unwrap(); // idempotent
+    reg.add_claim("ws-b", "src/db").unwrap();
+
+    let all = reg.claims().unwrap();
+    let flat: Vec<(String, String)> = all
+        .iter()
+        .map(|c| (c.workspace_name.clone(), c.path_prefix.clone()))
+        .collect();
+    assert_eq!(
+        flat,
+        vec![
+            ("ws-a".into(), "docs".into()),
+            ("ws-a".into(), "src/auth".into()),
+            ("ws-b".into(), "src/db".into()),
+        ]
+    );
+
+    // Claims die with the workspace row.
+    reg.delete_workspace_row("ws-a").unwrap();
+    let rest = reg.claims().unwrap();
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].workspace_name, "ws-b");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn prefix_matching_is_segment_aware() {
+    use ivk_core::{path_under_prefix, prefixes_overlap};
+
+    assert!(path_under_prefix("src/auth/session.ts", "src/auth"));
+    assert!(path_under_prefix("src/auth", "src/auth"));
+    assert!(path_under_prefix("src/auth/", "src/auth"));
+    assert!(path_under_prefix("src/auth/x", "src/auth/"));
+    assert!(!path_under_prefix("src/authx", "src/auth"));
+    assert!(!path_under_prefix("src", "src/auth"));
+
+    assert!(prefixes_overlap("src/auth", "src/auth/session.ts"));
+    assert!(prefixes_overlap("src/auth/session.ts", "src/auth"));
+    assert!(!prefixes_overlap("src/auth", "src/db"));
+}
+
+#[test]
 fn hotspots_rank_paths_by_distinct_changesets() {
     let root = temp_root();
     let reg = Registry::open_at_root(&root).unwrap();

@@ -392,3 +392,77 @@ fn status_reports_overlaps_across_dirty_and_changeset_work() {
     }
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn claims_warn_on_overlap_and_status_reports_violations() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    // Give the claimed subtree tracked content so edits show exact paths.
+    fs::create_dir_all(src.join("src/auth")).unwrap();
+    fs::write(src.join("src/auth/session.ts"), "session\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "auth module"]);
+
+    let v = run_ivk(&src, &["new", "guard", "--claim", "src/auth", "--json"]);
+    assert_eq!(names(&v["claims"]), vec!["src/auth"], "{}", v);
+    assert!(
+        names(&v["claim_warnings"]).is_empty(),
+        "first claim must not warn: {}",
+        v
+    );
+
+    // Overlapping claim from another workspace: created, but warned.
+    let v = run_ivk(
+        &src,
+        &["new", "rival", "--claim", "src/auth/session.ts", "--json"],
+    );
+    let warns = names(&v["claim_warnings"]);
+    assert_eq!(warns.len(), 1, "{}", v);
+    assert!(
+        warns[0].contains("guard"),
+        "warning names holder: {}",
+        warns[0]
+    );
+
+    // ws ls surfaces the claims.
+    let v = run_ivk(&src, &["ws", "ls", "--json"]);
+    let guard_row = v["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["name"] == "guard")
+        .expect("guard row");
+    assert_eq!(names(&guard_row["claims"]), vec!["src/auth"]);
+
+    // rival edits inside guard's claim: advisory violation in status.
+    fs::write(
+        src.join(".ivk/workspaces/rival/src/auth/session.ts"),
+        "rival edit\n",
+    )
+    .unwrap();
+    let v = run_ivk(&src, &["status", "--json"]);
+    assert!(
+        v["claim_violation_count"].as_u64().unwrap() >= 1,
+        "status: {}",
+        v
+    );
+    let viol = &v["claim_violations"][0];
+    assert_eq!(viol["toucher"], "rival");
+    assert_eq!(viol["claimant"], "guard");
+    assert_eq!(viol["claimed_prefix"], "src/auth");
+    assert_eq!(viol["path"], "src/auth/session.ts");
+
+    // Removing the claimant clears its claims — the violation disappears.
+    run_ivk(&src, &["ws", "rm", "guard", "--json"]);
+    let v = run_ivk(&src, &["status", "--json"]);
+    assert_eq!(v["claim_violation_count"], 0, "status after rm: {}", v);
+
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&src)
+        .args(["worktree", "remove", "--force"])
+        .arg(src.join(".ivk/workspaces/rival"))
+        .status();
+    let _ = fs::remove_dir_all(&root);
+}

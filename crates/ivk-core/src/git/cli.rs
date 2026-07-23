@@ -83,7 +83,10 @@ impl GitBackend for GitCliBackend {
 
     fn status(&self, worktree: &Path) -> Result<StatusSummary, GitError> {
         let mut cmd = git_in(worktree);
-        cmd.args(["status", "--porcelain"]);
+        // -uall lists untracked files individually instead of collapsing
+        // them to the topmost untracked directory — write-set facts
+        // (touched_paths, overlaps, claim checks) need file granularity.
+        cmd.args(["status", "--porcelain", "-uall"]);
         let out = capture_string(cmd, "status")?;
         let entries = out
             .lines()

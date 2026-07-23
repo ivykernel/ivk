@@ -29,6 +29,9 @@ struct WorkspaceRow {
     /// the integration point moves; the larger it gets, the bigger a merge
     /// conflict will grow. `None` when it could not be computed.
     behind_head: Option<u32>,
+    /// Advisory path prefixes this workspace declared with `--claim`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    claims: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -144,12 +147,18 @@ pub fn ls(args: &[&str]) -> i32 {
                 Some(n) if n > 0 => format!("  behind={}", n),
                 _ => String::new(),
             };
+            let claims = if w.claims.is_empty() {
+                String::new()
+            } else {
+                format!("  claims={}", w.claims.join(","))
+            };
             println!(
-                "  {:<28} {:<7} head={}{}",
+                "  {:<28} {:<7} head={}{}{}",
                 w.name,
                 w.status,
                 w.head.as_deref().unwrap_or("?"),
-                drift
+                drift,
+                claims
             );
         }
     }
@@ -975,6 +984,16 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>, repo_root: &Path) ->
         })
         .unwrap_or_default();
 
+    let mut claims_by_ws: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(all) = registry.and_then(|r| r.claims().ok()) {
+        for c in all {
+            claims_by_ws
+                .entry(c.workspace_name)
+                .or_default()
+                .push(c.path_prefix);
+        }
+    }
+
     let repo_head = GitCliBackend::new()
         .resolve_revision(repo_root, "HEAD")
         .ok();
@@ -991,6 +1010,7 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>, repo_root: &Path) ->
         let head = git_short_head(&p);
         let (status, dirty) = git_status_in(&p);
         let behind_head = behind_head(repo_root, head.as_deref(), repo_head.as_deref());
+        let claims = claims_by_ws.remove(&name).unwrap_or_default();
         rows.push(WorkspaceRow {
             state: states.get(&name).copied().unwrap_or("ready"),
             name,
@@ -999,6 +1019,7 @@ fn read_workspaces(dir: &Path, registry: Option<&Registry>, repo_root: &Path) ->
             file_count: None, // expensive; show command computes on demand
             head,
             behind_head,
+            claims,
         });
     }
     rows.sort_by(|a, b| a.name.cmp(&b.name));

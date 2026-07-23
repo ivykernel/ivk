@@ -26,8 +26,9 @@ pub use git::{
 };
 pub use materializer::{default_strategy, CopyMaterializer, CowMaterializer, Materializer};
 pub use registry::{
-    BeginCreate, ChangesetCheckRecord, ChangesetRecord, HotspotRecord, PendingOp, Registry,
-    RegistryError, SyncReport, WorkspaceRecord, WorkspaceState,
+    path_under_prefix, prefixes_overlap, BeginCreate, ChangesetCheckRecord, ChangesetRecord,
+    ClaimRecord, HotspotRecord, PendingOp, Registry, RegistryError, SyncReport, WorkspaceRecord,
+    WorkspaceState,
 };
 pub use workspace::{remove_workspace, RemoveWorkspaceError};
 

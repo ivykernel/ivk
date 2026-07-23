@@ -26,6 +26,18 @@ struct Overlap {
     parties: Vec<String>,
 }
 
+/// In-flight work crossing a path prefix another workspace claimed with
+/// `ivk new --claim`. Advisory, like the claim itself.
+#[derive(Serialize)]
+struct ClaimViolation {
+    path: String,
+    /// Workspace doing the touching.
+    toucher: String,
+    /// Workspace holding the claim.
+    claimant: String,
+    claimed_prefix: String,
+}
+
 #[derive(Serialize)]
 struct StatusPayload {
     repo_root: String,
@@ -37,6 +49,9 @@ struct StatusPayload {
     /// assigning new work, not after merges start failing.
     overlap_count: usize,
     overlaps: Vec<Overlap>,
+    /// In-flight paths crossing another workspace's advisory claim.
+    claim_violation_count: usize,
+    claim_violations: Vec<ClaimViolation>,
     strategy: &'static str,
 }
 
@@ -87,7 +102,8 @@ pub fn run(args: &[&str]) -> i32 {
 
     // Recorded-but-unexported changesets are in-flight work too, attributed
     // to their workspace (which may already be clean, or even removed).
-    if let Some(reg) = crate::reg::open_synced_if_present(&cwd) {
+    let registry = crate::reg::open_synced_if_present(&cwd);
+    if let Some(reg) = &registry {
         if let Ok(changesets) = reg.changesets() {
             for c in changesets.iter().filter(|c| c.exported_branch.is_none()) {
                 for path in &c.touched_paths {
@@ -95,6 +111,28 @@ pub fn run(args: &[&str]) -> i32 {
                         .entry(path.clone())
                         .or_default()
                         .insert(c.workspace_name.clone());
+                }
+            }
+        }
+    }
+
+    // In-flight paths crossing another workspace's advisory claim.
+    let mut claim_violations: Vec<ClaimViolation> = Vec::new();
+    if let Some(reg) = &registry {
+        if let Ok(claims) = reg.claims() {
+            for (path, owners) in &touched_by {
+                for claim in &claims {
+                    if !ivk_core::path_under_prefix(path, &claim.path_prefix) {
+                        continue;
+                    }
+                    for owner in owners.iter().filter(|o| **o != claim.workspace_name) {
+                        claim_violations.push(ClaimViolation {
+                            path: path.clone(),
+                            toucher: owner.clone(),
+                            claimant: claim.workspace_name.clone(),
+                            claimed_prefix: claim.path_prefix.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -116,6 +154,8 @@ pub fn run(args: &[&str]) -> i32 {
         workspaces,
         overlap_count: overlaps.len(),
         overlaps,
+        claim_violation_count: claim_violations.len(),
+        claim_violations,
         strategy: super::doctor::current_strategy(),
     };
 
@@ -160,6 +200,25 @@ pub fn run(args: &[&str]) -> i32 {
                         if payload.overlap_count > 5 { "; ..." } else { "" }
                     ));
                 }
+                if !payload.claim_violations.is_empty() {
+                    let preview: Vec<String> = payload
+                        .claim_violations
+                        .iter()
+                        .take(5)
+                        .map(|c| {
+                            format!(
+                                "{} touches {} (claimed as `{}` by {})",
+                                c.toucher, c.path, c.claimed_prefix, c.claimant
+                            )
+                        })
+                        .collect();
+                    v.push(format!(
+                        "Claim violation(s) — {}: {}{}. Advisory: coordinate with the claimant or re-scope before conflicts materialize.",
+                        payload.claim_violation_count,
+                        preview.join("; "),
+                        if payload.claim_violation_count > 5 { "; ..." } else { "" }
+                    ));
+                }
                 v
             })
         } else {
@@ -194,6 +253,15 @@ pub fn run(args: &[&str]) -> i32 {
             );
             for o in &payload.overlaps {
                 println!("  {}: {}", o.path, o.parties.join(", "));
+            }
+        }
+        if !payload.claim_violations.is_empty() {
+            println!("{} claim violation(s):", payload.claim_violation_count);
+            for c in &payload.claim_violations {
+                println!(
+                    "  {} touches {} — claimed as `{}` by {}",
+                    c.toucher, c.path, c.claimed_prefix, c.claimant
+                );
             }
         }
     }

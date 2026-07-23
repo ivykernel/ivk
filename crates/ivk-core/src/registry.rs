@@ -120,6 +120,38 @@ pub struct ChangesetCheckRecord {
     pub checked_at_unix: u64,
 }
 
+/// An advisory path claim: workspace `workspace_name` declares intent to
+/// work under `path_prefix`. Nothing is enforced — the kernel records the
+/// declaration and reports collisions; whether to serialize, re-scope, or
+/// proceed anyway is the orchestrator's call. Claims die with their
+/// workspace row.
+#[derive(Debug, Clone)]
+pub struct ClaimRecord {
+    pub workspace_name: String,
+    pub path_prefix: String,
+    pub created_at_unix: u64,
+}
+
+/// Segment-aware prefix test: `src/auth` covers `src/auth` itself and
+/// everything under `src/auth/`, but not `src/authx`. Trailing slashes on
+/// either side are ignored.
+pub fn path_under_prefix(path: &str, prefix: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return true;
+    }
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Do two claim prefixes cover overlapping subtrees?
+pub fn prefixes_overlap(a: &str, b: &str) -> bool {
+    path_under_prefix(a, b) || path_under_prefix(b, a)
+}
+
 /// A path that keeps showing up across changesets — the registry-level
 /// early warning for contention and megafile growth: many independent
 /// changes to one file means either the file is too big or task boundaries
@@ -191,6 +223,12 @@ CREATE TABLE IF NOT EXISTS changeset_checks (
   conflict_paths  TEXT NOT NULL,
   checked_at      INTEGER NOT NULL,
   PRIMARY KEY (changeset_id, target_snapshot)
+);
+CREATE TABLE IF NOT EXISTS claims (
+  workspace_name TEXT NOT NULL,
+  path_prefix    TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  PRIMARY KEY (workspace_name, path_prefix)
 );
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 ";
@@ -377,6 +415,12 @@ impl Registry {
     pub fn delete_workspace_row(&self, name: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM workspaces WHERE name = ?1", params![name])?;
+        // Claims are declarations of intent by a live workspace; they die
+        // with the row.
+        self.conn.execute(
+            "DELETE FROM claims WHERE workspace_name = ?1",
+            params![name],
+        )?;
         Ok(())
     }
 
@@ -495,6 +539,34 @@ impl Registry {
              FROM changesets ORDER BY created_at DESC, id",
         )?;
         let rows = stmt.query_map([], row_to_changeset)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    // ---------- claims ----------
+
+    /// Record an advisory claim. Idempotent per (workspace, prefix).
+    pub fn add_claim(&self, workspace: &str, path_prefix: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO claims(workspace_name, path_prefix, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![workspace, path_prefix.trim_end_matches('/'), now_unix()],
+        )?;
+        Ok(())
+    }
+
+    /// Every live claim, ordered for stable output.
+    pub fn claims(&self) -> Result<Vec<ClaimRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace_name, path_prefix, created_at
+             FROM claims ORDER BY workspace_name, path_prefix",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ClaimRecord {
+                workspace_name: row.get(0)?,
+                path_prefix: row.get(1)?,
+                created_at_unix: row.get::<_, i64>(2)? as u64,
+            })
+        })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 

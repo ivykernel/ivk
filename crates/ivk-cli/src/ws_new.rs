@@ -23,6 +23,13 @@ struct CreatedWorkspace {
 struct WsNewPayload {
     created: Vec<CreatedWorkspace>,
     failed: Vec<FailedWorkspace>,
+    /// Advisory path prefixes recorded for the created workspace (--claim).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    claims: Vec<String>,
+    /// Human-readable collisions with other live workspaces' claims.
+    /// Advisory: the workspace is still created; the orchestrator decides.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    claim_warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -37,6 +44,7 @@ pub fn run(args: &[&str]) -> i32 {
 
     let mut names: Vec<&str> = Vec::new();
     let mut from: Option<&str> = None;
+    let mut claims: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let a = args[i];
@@ -54,10 +62,34 @@ pub fn run(args: &[&str]) -> i32 {
                     )
                 }
             }
+        } else if a == "--claim" {
+            i += 1;
+            match args.get(i) {
+                Some(v) if !v.starts_with('-') => claims.push(*v),
+                _ => {
+                    return fail(
+                        "missing_argument",
+                        "--claim requires a path prefix (e.g. --claim src/auth)",
+                        "ivk help",
+                        json || agent,
+                        2,
+                    )
+                }
+            }
         } else if !a.starts_with('-') {
             names.push(a);
         }
         i += 1;
+    }
+
+    if !claims.is_empty() && names.len() > 1 {
+        return fail(
+            "conflicting_args",
+            "--claim declares one workspace's intent; pass exactly one workspace name",
+            "ivk help",
+            json || agent,
+            2,
+        );
     }
 
     if names.is_empty() {
@@ -188,6 +220,30 @@ pub fn run(args: &[&str]) -> i32 {
         }
     }
 
+    // Record claims for the (single) created workspace and surface
+    // collisions with other live workspaces' claims. Purely advisory:
+    // creation already succeeded, the warning is a planning fact.
+    let mut claim_warnings: Vec<String> = Vec::new();
+    if !claims.is_empty() && !created.is_empty() {
+        let name = &created[0].name;
+        if let Some(reg) = &registry {
+            let existing = reg.claims().unwrap_or_default();
+            for claim in &claims {
+                for other in existing.iter().filter(|e| &e.workspace_name != name) {
+                    if ivk_core::prefixes_overlap(claim, &other.path_prefix) {
+                        claim_warnings.push(format!(
+                            "claim `{}` overlaps `{}` held by workspace `{}`",
+                            claim, other.path_prefix, other.workspace_name
+                        ));
+                    }
+                }
+                let _ = reg.add_claim(name, claim);
+            }
+        } else {
+            claim_warnings.push("no registry available; claims were not recorded".into());
+        }
+    }
+
     let ok = failed.is_empty();
     let next = if ok && created.len() == 1 {
         Some(format!(
@@ -202,7 +258,7 @@ pub fn run(args: &[&str]) -> i32 {
 
     if json || agent {
         let steps = if agent {
-            Some(if ok {
+            let mut v = if ok {
                 vec![
                     if created.len() == 1 {
                         format!("cd {} to work in the new workspace.", created[0].path)
@@ -223,12 +279,27 @@ pub fn run(args: &[&str]) -> i32 {
                     ),
                     "Run `ivk help --agent` for the golden path.".into(),
                 ]
-            })
+            };
+            if !claim_warnings.is_empty() {
+                v.push(format!(
+                    "Claim collision(s): {}. Consider re-scoping this task or serializing it after the holder exports.",
+                    claim_warnings.join("; ")
+                ));
+            }
+            Some(v)
         } else {
             None
         };
 
-        let payload = WsNewPayload { created, failed };
+        let payload = WsNewPayload {
+            created,
+            failed,
+            claims: claims
+                .iter()
+                .map(|c| c.trim_end_matches('/').to_string())
+                .collect(),
+            claim_warnings,
+        };
         let env = Envelope {
             ok,
             command: "ws.new",
@@ -244,6 +315,12 @@ pub fn run(args: &[&str]) -> i32 {
                 "created workspace {} ({} entries, {}ms, strategy={})",
                 w.path, w.entries_cloned, w.elapsed_ms, w.strategy,
             );
+        }
+        for c in &claims {
+            println!("claimed {}", c.trim_end_matches('/'));
+        }
+        for warn in &claim_warnings {
+            eprintln!("ivk: warning: {}", warn);
         }
         for f in &failed {
             eprintln!("ivk: failed to create workspace `{}`: {}", f.name, f.reason);
