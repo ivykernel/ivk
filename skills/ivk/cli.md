@@ -124,7 +124,7 @@ truth. `--agent` names the largest workspace and suggests `ivk ws rm` +
 |---|---|
 | `ivk init` | create `.ivk/` skeleton |
 | `ivk init --agent-instructions` | also generate `AGENTS.md` + `skills/ivk/*` |
-| `ivk status [--json]` | one-shot summary across all workspaces |
+| `ivk status [--json]` | one-shot summary across all workspaces, including predicted conflicts (`overlaps`: paths touched by 2+ in-flight workspaces) |
 | `ivk ws ls [--json]` | list workspaces |
 | `ivk ws show <name> [--json]` | show one workspace |
 | `ivk ws diff <name>` | git diff vs base snapshot |

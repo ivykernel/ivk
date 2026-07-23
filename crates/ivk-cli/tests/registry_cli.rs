@@ -351,3 +351,44 @@ fn registry_rebuilds_from_directory_layout_after_db_loss() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn status_reports_overlaps_across_dirty_and_changeset_work() {
+    let root = temp_root();
+    let src = make_src_repo(&root);
+
+    run_ivk(&src, &["new", "ws-a", "--json"]);
+    run_ivk(&src, &["new", "ws-b", "--json"]);
+
+    // Both workspaces edit the same file: predicted conflict.
+    fs::write(src.join(".ivk/workspaces/ws-a/hello.txt"), "a\n").unwrap();
+    fs::write(src.join(".ivk/workspaces/ws-b/hello.txt"), "b\n").unwrap();
+
+    let v = run_ivk(&src, &["status", "--json"]);
+    assert_eq!(v["overlap_count"], 1, "status: {}", v);
+    assert_eq!(v["overlaps"][0]["path"], "hello.txt");
+    assert_eq!(names(&v["overlaps"][0]["parties"]), vec!["ws-a", "ws-b"]);
+
+    // ws-a records a changeset — the workspace reads clean afterwards, but
+    // the unexported changeset keeps ws-a's edit in-flight.
+    let ch = run_ivk(&src, &["ch", "new", "ws-a", "--json"]);
+    let ch_id = ch["id"].as_str().expect("id").to_string();
+    let v = run_ivk(&src, &["status", "--json"]);
+    assert_eq!(v["overlap_count"], 1, "status after ch new: {}", v);
+    assert_eq!(names(&v["overlaps"][0]["parties"]), vec!["ws-a", "ws-b"]);
+
+    // Export takes ws-a out of the in-flight set; ws-b alone is no overlap.
+    run_ivk(&src, &["export", &ch_id, "agent/ws-a", "--json"]);
+    let v = run_ivk(&src, &["status", "--json"]);
+    assert_eq!(v["overlap_count"], 0, "status after export: {}", v);
+
+    for name in ["ws-a", "ws-b"] {
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&src)
+            .args(["worktree", "remove", "--force"])
+            .arg(src.join(".ivk/workspaces").join(name))
+            .status();
+    }
+    let _ = fs::remove_dir_all(&root);
+}
